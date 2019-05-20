@@ -21,7 +21,7 @@ function makeId(length) {
 
 exports.handler = (event, context, callback) => {
     const url = s3.getSignedUrl('putObject', {
-        Bucket: 'cb-user-image-uploads',
+        Bucket: "%USERIMAGEUPLOADSBUCKET%",
         Key: makeId(32),
         Expires: 1000, //expiry time in sec
     });
