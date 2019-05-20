@@ -4,9 +4,14 @@ import troposphere.awslambda
 import troposphere.iam
 import troposphere.apigateway
 import troposphere.s3
+import awacs
+import awacs.iam
+import awacs.s3
 
 
 class BackendTemplateFactory:
+    presigned_url_fn_name = "GetImageUploadPresignedUrl"
+
     def create_template(self) -> ts.Template:
         self.template = ts.Template("Cambrian image processing backend")
 
@@ -117,10 +122,10 @@ class BackendTemplateFactory:
 
     def _create_presigned_url_lambda(self):
         # Create lambda execution role
-        # TODO: Add S3 PutObject for bucket CambrianUserImageUploads
         self.presigned_url_lambda_execution_role = self._res(
             ts.iam.Role(
                 "GetImageUploadPresignedUrlExecutionRole",
+                DependsOn=self.user_image_upload_bucket.title,
                 Path="/",
                 Policies=[
                     ts.iam.Policy(
@@ -131,6 +136,17 @@ class BackendTemplateFactory:
                                 "Action": ["logs:*"],
                                 "Resource": "arn:aws:logs:*:*:*",
                                 "Effect": "Allow"
+                            }]
+                        }
+                    ),
+                    ts.iam.Policy(
+                        PolicyName="s3UserUpload",
+                        PolicyDocument={
+                            "Version": "2012-10-17",
+                            "Statement": [{
+                                "Action": ["s3:PutObject"],
+                                "Effect": "Allow",
+                                "Resource": self.user_image_upload_bucket.get_att("Arn")
                             }]
                         }
                     )
@@ -150,14 +166,19 @@ class BackendTemplateFactory:
 
         # Create lambda function with code loaded from a file
         with open("getimageuploadpresignedurl.js", "r") as code_file:
-            code_lines = [l.replace("%USERIMAGEUPLOADSBUCKET%", self.user_image_upload_bucket.title)
-                          for l in code_file.readlines()]
+            code_lines = code_file.readlines()
 
         self.presigned_url_lambda = self._res(
             ts.awslambda.Function(
-                "GetImageUploadPresignedUrl",
+                self.presigned_url_fn_name,
+                DependsOn=self.user_image_upload_bucket.title,
                 Code=ts.awslambda.Code(ZipFile=ts.Join("", code_lines)),
                 Handler="index.handler",
+                Environment=ts.awslambda.Environment(
+                    Variables={
+                        "BUCKET": self.user_image_upload_bucket.get_att("Arn")
+                    }
+                ),
                 Role=self.presigned_url_lambda_execution_role.get_att("Arn"),
                 Runtime="nodejs8.10",
                 MemorySize=128,  # TODO: Make this param
@@ -180,6 +201,18 @@ class BackendTemplateFactory:
                 ParentId=self.rest_api.get_att("RootResourceId"),
                 RestApiId=self.rest_api.ref(),
                 PathPart='GetImageUploadPresignedUrl'
+            )
+        )
+
+        # Create lambda permissions for api gateway
+        self.rest_api_get_presigned_permissions = self._res(
+            ts.awslambda.Permission(
+                "RestApiGetPresignedUrlPermissions",
+                Action="lambda:invokeFunction",
+                Principal="apigateway.amazonaws.com",
+                FunctionName=self.presigned_url_lambda.get_att("Arn"),
+                SourceArn=ts.Sub("arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiName}/*/*/${funcName}",
+                                 apiName=self.rest_api.ref(), funcName=self.presigned_url_fn_name)
             )
         )
 
