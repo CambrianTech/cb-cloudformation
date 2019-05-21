@@ -226,7 +226,7 @@ class BackendTemplateFactory:
                 AuthorizationType="NONE",
                 Integration=ts.apigateway.Integration(
                     Type="AWS_PROXY",
-                    IntegrationHttpMethod="GET",
+                    IntegrationHttpMethod="POST",
                     IntegrationResponses=[
                         ts.apigateway.IntegrationResponse(StatusCode="200")
                     ],
@@ -253,7 +253,7 @@ class BackendTemplateFactory:
         self.api_stage = self._res(
             ts.apigateway.Stage(
                 "RestApiStage",
-                StageName="RestApiStage",
+                StageName="v1",
                 RestApiId=self.rest_api.ref(),
                 DeploymentId=self.api_deployment.ref()
             )
