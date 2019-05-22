@@ -4,6 +4,12 @@ import troposphere.awslambda
 import troposphere.iam
 import troposphere.apigateway
 import troposphere.s3
+import troposphere.ecs
+import troposphere.cloudformation
+import troposphere.autoscaling
+import troposphere.elasticloadbalancing
+import troposphere.policies
+import troposphere.ecr
 import awacs
 import awacs.iam
 import awacs.s3
@@ -11,6 +17,8 @@ import awacs.s3
 
 class BackendTemplateFactory:
     presigned_url_fn_name = "GetImageUploadPresignedUrl"
+    image_processing_container_name = "ImageProcessingContainer"
+    ecr_repository_name = "image-processing-backend"
 
     def create_template(self) -> ts.Template:
         self.template = ts.Template("Cambrian image processing backend")
@@ -22,11 +30,15 @@ class BackendTemplateFactory:
         self._create_s3_buckets()
         self._create_presigned_url_lambda()
         self._create_api_gateway()
+        self._create_cluster()
 
         return self.template
 
     def _res(self, resource):
         return self.template.add_resource(resource)
+
+    def _map(self, name, mapping):
+        return self.template.add_mapping(name, mapping)
 
     def _create_vpc(self):
         # Create VPC
@@ -121,7 +133,7 @@ class BackendTemplateFactory:
         )
 
     def _create_presigned_url_lambda(self):
-        # Create lambda execution role
+        # Create lambda execution role with S3 upload rights
         self.presigned_url_lambda_execution_role = self._res(
             ts.iam.Role(
                 "GetImageUploadPresignedUrlExecutionRole",
@@ -258,6 +270,258 @@ class BackendTemplateFactory:
                 DeploymentId=self.api_deployment.ref()
             )
         )
+
+    def _create_cluster(self):
+        # Create cluster
+        self.image_processing_cluster = self._res(ts.ecs.Cluster(
+            "ImageProcessingCluster",
+            DependsOn=self.vpc.title
+        ))
+
+        self.image_processing_instance_id_mapping = self._map("ImageProcessingInstanceId", {
+            # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/launch_container_instance.html
+            "us-east-1": {"AMI": "ami-00cf4737e238866a3"},
+            "us-east-2": {"AMI": "ami-012ca23958772cf72"},
+            "us-west-1": {"AMI": "ami-06d87f0156b1d4407"},
+            "us-west-2": {"AMI": "ami-0a9f5be2a016dccad"},
+        })
+
+        self.image_processing_launch_config = self._res(ts.autoscaling.LaunchConfiguration(
+            "ImageProcessingLaunchConfiguration",
+            Metadata=ts.autoscaling.Metadata(
+                troposphere.cloudformation.Init({
+                    "config": ts.cloudformation.InitConfig(
+                        commands={
+                            "01_add_instance_to_cluster": {
+                                "command": ts.Join("", [
+                                    "#!/bin/bash\n",
+                                    "echo ECS_CLUSTER=",
+                                    self.image_processing_cluster.ref(),
+                                    " >> /etc/ecs/ecs.config"
+                                ])
+                            }
+                        },
+                        files=ts.cloudformation.InitFiles({
+                            "/etc/cfn/cfn-hup.conf": ts.cloudformation.InitFile(
+                                content=ts.Sub("""
+                                [main]
+                                stack=${AWS::StackId}
+                                region=${AWS::Region}
+                                """),
+                                mode="00400",
+                                owner="root",
+                                group="root"
+                            ),
+                            "/etc/cfn/hooks.d/cfn-auto-reloader.conf": ts.cloudformation.InitFile(
+                                content=ts.Sub("""
+                                [cfn-auto-reloader-hook]
+                                triggers=post.update
+                                path=Resources.ContainerInstances.Metadata.AWS::CloudFormation::Init
+                                action=/opt/aws/bin/cfn-init -v --stack ${AWS::StackName}
+                                                                --resource ContainerInstances
+                                                                --region ${AWS::Region}
+                                runas=root
+                                """),
+                            ),
+                        })
+                    )
+                })
+            ),
+            ImageId=ts.FindInMap("ImageProcessingInstanceId", ts.Ref(ts.AWS_REGION), "AMI"), # TODO: Map name automatic
+            InstanceType="t2.medium"
+        ))
+
+        self.image_processing_auto_scaling_group = self._res(ts.autoscaling.AutoScalingGroup(
+            "ImageProcessingAutoScalingGroup",
+            VPCZoneIdentifier=[self.pub_sub.ref()],
+            LaunchConfigurationName=self.image_processing_launch_config.ref(),
+            MinSize=1,
+            MaxSize=1,  # TODO: Parameter for this?
+            DesiredCapacity=1,  # TODO: Parameter for this?
+            CreationPolicy=ts.policies.CreationPolicy(
+                ResourceSignal=ts.policies.ResourceSignal(
+                    Timeout="PT5M"
+                )
+            ),
+            UpdatePolicy=ts.policies.UpdatePolicy(
+                AutoScalingRollingUpdate=ts.policies.AutoScalingRollingUpdate(
+                    MinInstancesInService=1,
+                    MaxBatchSize=1,
+                    PauseTime="PT5M",
+                    WaitOnResourceSignals=True
+                )
+            )
+        ))
+
+        # Create service and instance roles
+        self.image_processing_service_role = self._res(ts.iam.Role(
+            "ImageProcessingServiceRole",
+            Path="/",
+            AssumeRolePolicyDocument={
+                "Version": "2012-10-17",
+                "Statement": [{
+                    "Action": ["sts:AssumeRole"],
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": ["ecs.amazonaws.com"]
+                    }
+                }]
+            },
+            Policies=[ts.iam.Policy(
+                PolicyName="ImageProcessingServicePolicy",
+                PolicyDocument={
+                    "Version": "2012-10-17",
+                    "Statement": [{
+                        "Action": [
+                            "ec2:AuthorizeSecurityGroupIngress",
+                            "ec2:Describe*",
+                            "elasticloadbalancing:DeregisterInstancesFromLoadBalancer",
+                            "elasticloadbalancing:DeregisterTargets",
+                            "elasticloadbalancing:Describe*",
+                            "elasticloadbalancing:RegisterInstancesWithLoadBalancer",
+                            "elasticloadbalancing:RegisterTargets"
+                        ],
+                        "Effect": "Allow",
+                        "Resource": "*"
+                    }]
+                }
+            )]
+        ))
+
+        self.image_processing_instance_role = self._res(ts.iam.Role(
+            "ImageProcessingInstanceRole",
+            Path="/",
+            AssumeRolePolicyDocument={
+                "Version": "2012-10-17",
+                "Statement": [{
+                    "Action": ["sts:AssumeRole"],
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": ["ec2.amazonaws.com"]
+                    }
+                }]
+            },
+            Policies=[ts.iam.Policy(
+                PolicyName="ImageProcessingInstancePolicy",
+                PolicyDocument={
+                    "Version": "2012-10-17",
+                    "Statement": [{
+                        "Action": [
+                            "ecs:CreateCluster",
+                            "ecs:RegisterContainerInstance",
+                            "ecs:DeregisterContainerInstance",
+                            "ecs:DiscoverPollEndpoint",
+                            "ecs:Submit*",
+                            "ecr:*",
+                            "ecs:Poll"
+                        ],
+                        "Effect": "Allow",
+                        "Resource": "*"
+                    }]
+                }
+            )]
+        ))
+
+        """
+        # Create ECR
+        self.image_processing_ecr_repo = self._res(ts.ecr.Repository(
+            "ImageProcessingECRRepository",
+            RepositoryName=self.ecr_repository_name,
+            RepositoryPolicyText={
+                "Version": "2008-10-17",
+                "Statement": [{
+                    "Action": [
+                        "ecr:GetDownloadUrlForLayer",
+                        "ecr:BatchGetImage",
+                        "ecr:BatchCheckLayerAvailability",
+                        "ecr:PutImage",
+                        "ecr:InitiateLayerUpload",
+                        "ecr:UploadLayerPart",
+                        "ecr:CompleteLayerUpload"
+                    ],
+                    "Effect": "Allow",
+                    "Principal": {
+                        "AWS": ts.Sub("arn:aws:iam::${AWS::AccountId}:root")
+                    }
+                }]
+            }
+        ))
+        """
+
+        self.image_processing_instance_profile = self._res(ts.iam.InstanceProfile(
+            "ImageProcessingInstanceProfile",
+            Path="/",
+            Roles=[self.image_processing_instance_role.ref()]
+        ))
+
+        # Create load balancer
+        self.image_processing_load_balancer_sg = self._res(ts.ec2.SecurityGroup(
+            "ImageProcessingLoadBalancerSG",
+            GroupDescription="Allow TCP traffic on 8080",
+            VpcId=self.vpc.ref(),
+            SecurityGroupIngress=[ts.ec2.SecurityGroupRule(
+                "ImageProcessingLoadBalancerSGIngress",
+                CidrIp="0.0.0.0/0",
+                IpProtocol="tcp",
+                FromPort=8080,
+                ToPort=8080
+            )]
+        ))
+
+        self.image_processing_load_balancer = self._res(ts.elasticloadbalancing.LoadBalancer(
+            "ImageProcessingLoadBalancer",
+            DependsOn=[self.image_processing_load_balancer_sg.title],
+            Subnets=[self.pub_sub.ref()],
+            Listeners=[ts.elasticloadbalancing.Listener(
+                LoadBalancerPort=8080,
+                InstancePort=8080,
+                Protocol="HTTP"
+            )],
+            SecurityGroups=[self.image_processing_load_balancer_sg.ref()],
+            HealthCheck=ts.elasticloadbalancing.HealthCheck(
+                # Make an invalid segment request, TODO: Do it properly?
+                Target="HTTP:8080/segment/invalidurl",
+                HealthyThreshold="2",
+                UnhealthyThreshold="10",
+                Interval="30",
+                Timeout=5
+            ),
+            Tags=self.tags_stack_id
+        ))
+
+        self.image_processing_task_def = self._res(ts.ecs.TaskDefinition(
+            "ImageProcessingTaskDefinition",
+            ContainerDefinitions=[ts.ecs.ContainerDefinition(
+                Name=self.image_processing_container_name,
+                Cpu=2048,
+                Memory=4096,
+                Essential=True,
+                PortMappings=[ts.ecs.PortMapping(
+                    HostPort=8080,
+                    ContainerPort=8080
+                )],
+                Image=ts.Sub("${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}", ECRRepoName=self.ecr_repository_name)
+            )]
+        ))
+
+        # Create ECS service on cluster
+        self.image_processing_service = self._res(ts.ecs.Service(
+            "ImageProcessingService",
+            DependsOn=self.image_processing_auto_scaling_group.title,
+            Cluster=self.image_processing_cluster.ref(),
+            DesiredCount=1,
+            DeploymentConfiguration=ts.ecs.DeploymentConfiguration(
+                MaximumPercent=100,
+                MinimumHealthyPercent=0  # 0% Needed for dev updates
+            ),
+            LoadBalancers=[ts.ecs.LoadBalancer(
+                ContainerName=self.image_processing_container_name,
+                ContainerPort=8080,
+                LoadBalancerName=self.image_processing_load_balancer.ref()
+            )],
+            Role=self.image_processing_service_role.ref(),
+            TaskDefinition=self.image_processing_task_def.ref()
+        ))
 
 
 def main():
