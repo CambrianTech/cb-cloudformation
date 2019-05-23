@@ -10,6 +10,8 @@ import troposphere.autoscaling
 import troposphere.elasticloadbalancing
 import troposphere.policies
 import troposphere.ecr
+import troposphere.helpers
+import troposphere.helpers.userdata
 import awacs
 import awacs.iam
 import awacs.s3
@@ -18,7 +20,11 @@ import awacs.s3
 class BackendTemplateFactory:
     presigned_url_fn_name = "GetImageUploadPresignedUrl"
     image_processing_container_name = "ImageProcessingContainer"
-    ecr_repository_name = "image-processing-backend"
+    ecr_repository_name = "image-processing-backend:latest"
+
+    image_processing_files_bucket_name = "cb-imageprocessingservice"
+    user_image_uploads_bucket_name = "cb-user-image-uploads"
+    image_processing_results_bucket_name = "cb-imageprocessingservice-results"
 
     def create_template(self) -> ts.Template:
         self.template = ts.Template("Cambrian image processing backend")
@@ -109,6 +115,8 @@ class BackendTemplateFactory:
         # TODO: ACL Rules
 
     def _create_s3_buckets(self):
+        pass
+        """
         self.user_image_upload_bucket = self._res(
             ts.s3.Bucket(
                 "CambrianUserImageUploads",
@@ -130,14 +138,13 @@ class BackendTemplateFactory:
                 "CambrianImageProcessingFiles",
                 AccessControl=ts.s3.Private
             )
-        )
+        )"""
 
     def _create_presigned_url_lambda(self):
         # Create lambda execution role with S3 upload rights
         self.presigned_url_lambda_execution_role = self._res(
             ts.iam.Role(
                 "GetImageUploadPresignedUrlExecutionRole",
-                DependsOn=self.user_image_upload_bucket.title,
                 Path="/",
                 Policies=[
                     ts.iam.Policy(
@@ -158,7 +165,7 @@ class BackendTemplateFactory:
                             "Statement": [{
                                 "Action": ["s3:PutObject"],
                                 "Effect": "Allow",
-                                "Resource": self.user_image_upload_bucket.get_att("Arn")
+                                "Resource": "arn:aws:s3:::%s/*" % self.image_processing_results_bucket_name,
                             }]
                         }
                     )
@@ -183,12 +190,11 @@ class BackendTemplateFactory:
         self.presigned_url_lambda = self._res(
             ts.awslambda.Function(
                 self.presigned_url_fn_name,
-                DependsOn=self.user_image_upload_bucket.title,
                 Code=ts.awslambda.Code(ZipFile=ts.Join("", code_lines)),
                 Handler="index.handler",
                 Environment=ts.awslambda.Environment(
                     Variables={
-                        "BUCKET": self.user_image_upload_bucket.get_att("Arn")
+                        "BUCKET": self.user_image_uploads_bucket_name
                     }
                 ),
                 Role=self.presigned_url_lambda_execution_role.get_att("Arn"),
@@ -286,10 +292,25 @@ class BackendTemplateFactory:
             "us-west-2": {"AMI": "ami-0a9f5be2a016dccad"},
         })
 
+        self.image_processing_instance_sg = self._res(ts.ec2.SecurityGroup(
+            "ImageProcessingInstanceSG",
+            GroupDescription="Allow TCP traffic on 8080",
+            VpcId=self.vpc.ref(),
+            SecurityGroupIngress=[
+                ts.ec2.SecurityGroupRule(
+                    "ImageProcessingLoadBalancerSGIngress",
+                    CidrIp="0.0.0.0/0",
+                    IpProtocol="tcp",
+                    FromPort=8080,
+                    ToPort=8080
+                ),
+            ]
+        ))
+
         self.image_processing_launch_config = self._res(ts.autoscaling.LaunchConfiguration(
             "ImageProcessingLaunchConfiguration",
             Metadata=ts.autoscaling.Metadata(
-                troposphere.cloudformation.Init({
+                ts.cloudformation.Init({
                     "config": ts.cloudformation.InitConfig(
                         commands={
                             "01_add_instance_to_cluster": {
@@ -303,32 +324,80 @@ class BackendTemplateFactory:
                         },
                         files=ts.cloudformation.InitFiles({
                             "/etc/cfn/cfn-hup.conf": ts.cloudformation.InitFile(
-                                content=ts.Sub("""
-                                [main]
-                                stack=${AWS::StackId}
-                                region=${AWS::Region}
-                                """),
+                                content=ts.Sub((
+                                    "[main]\n"
+                                    "stack=${AWS::StackId}\n"
+                                    "region=${AWS::Region}\n"
+                                )),
                                 mode="00400",
                                 owner="root",
                                 group="root"
                             ),
                             "/etc/cfn/hooks.d/cfn-auto-reloader.conf": ts.cloudformation.InitFile(
-                                content=ts.Sub("""
-                                [cfn-auto-reloader-hook]
-                                triggers=post.update
-                                path=Resources.ContainerInstances.Metadata.AWS::CloudFormation::Init
-                                action=/opt/aws/bin/cfn-init -v --stack ${AWS::StackName}
-                                                                --resource ContainerInstances
-                                                                --region ${AWS::Region}
-                                runas=root
-                                """),
+                                content=ts.Sub((
+                                    "[cfn-auto-reloader-hook]\n"
+                                    "triggers=post.update\n"
+                                    "path=Resources.ContainerInstances.Metadata.AWS::CloudFormation::Init\n"
+                                    "action=/opt/aws/bin/cfn-init -v --stack ${AWS::StackName}"
+                                    # TODO: Get resource name from title
+                                    " --resource ImageProcessingLaunchConfiguration"
+                                    " --region ${AWS::Region}\n"
+                                    "runas=root\n"
+                                )),
                             ),
-                        })
+                        }),
+                        services={
+                            "sysvinit": {
+                                'cfn-hup': ts.cloudformation.InitService(
+                                    ensureRunning='true',
+                                    enabled='true',
+                                    files=['/etc/cfn/cfn-hup.conf',
+                                           '/etc/cfn/hooks.d/cfn-auto-reloader.conf']
+                                ),
+                                "docker": {"enabled": "true", "ensureRunning": "true"}
+                            }
+                        },
+                        packages={
+                            "yum": {
+                                "docker": [],
+                                "ecs-init": [],
+                            }
+                        }
                     )
                 })
             ),
-            ImageId=ts.FindInMap("ImageProcessingInstanceId", ts.Ref(ts.AWS_REGION), "AMI"), # TODO: Map name automatic
-            InstanceType="t2.medium"
+            ImageId=ts.FindInMap("ImageProcessingInstanceId", ts.Ref(
+                ts.AWS_REGION), "AMI"),  # TODO: Map name automatic
+            InstanceType="t2.large",
+            UserData=ts.Base64(
+                # https://github.com/DiUS/cloudformation-templates/blob/b0dbf24f62dfa7c6867908cda168598f318bd6e3/ECS/ecs-cluster.template#L341-L365
+                ts.Join("", [
+                    "#!/bin/bash -xe\n",
+                    "yum -y update\n",
+                    "yum install -y aws-cfn-bootstrap\n",
+                    "/opt/aws/bin/cfn-init -v ",
+                    " --stack ",
+                    ts.Ref(ts.AWS_STACK_NAME),
+                    # TODO: Get resource name from title
+                    " --resource %s " % "ImageProcessingLaunchConfiguration",
+                    " --region ",
+                    ts.Ref(ts.AWS_REGION),
+                    "\n",
+                    "/opt/aws/bin/cfn-signal -e $? ",
+                    " --stack ",
+                    ts.Ref(ts.AWS_STACK_NAME),
+                    # TODO: Get resource name from title
+                    " --resource ImageProcessingAutoScalingGroup",
+                    " --region ",
+                    ts.Ref(ts.AWS_REGION),
+                    "\n"
+                ])
+            ),
+            IamInstanceProfile=ts.Ref(
+                "ImageProcessingInstanceProfile"),  # TODO: Get from self
+            AssociatePublicIpAddress=True,
+            SecurityGroups=[self.image_processing_instance_sg.ref()],
+            KeyName="imageprocessing-instance"
         ))
 
         self.image_processing_auto_scaling_group = self._res(ts.autoscaling.AutoScalingGroup(
@@ -336,8 +405,10 @@ class BackendTemplateFactory:
             VPCZoneIdentifier=[self.pub_sub.ref()],
             LaunchConfigurationName=self.image_processing_launch_config.ref(),
             MinSize=1,
-            MaxSize=1,  # TODO: Parameter for this?
+            MaxSize=2,  # TODO: Parameter for this?
             DesiredCapacity=1,  # TODO: Parameter for this?
+
+            # Wait 5 minutes before timing out when not receiving health signal
             CreationPolicy=ts.policies.CreationPolicy(
                 ResourceSignal=ts.policies.ResourceSignal(
                     Timeout="PT5M"
@@ -401,25 +472,65 @@ class BackendTemplateFactory:
                     }
                 }]
             },
-            Policies=[ts.iam.Policy(
-                PolicyName="ImageProcessingInstancePolicy",
-                PolicyDocument={
-                    "Version": "2012-10-17",
-                    "Statement": [{
-                        "Action": [
-                            "ecs:CreateCluster",
-                            "ecs:RegisterContainerInstance",
-                            "ecs:DeregisterContainerInstance",
-                            "ecs:DiscoverPollEndpoint",
-                            "ecs:Submit*",
-                            "ecr:*",
-                            "ecs:Poll"
-                        ],
-                        "Effect": "Allow",
-                        "Resource": "*"
-                    }]
-                }
-            )]
+            Policies=[
+                ts.iam.Policy(
+                    PolicyName="ImageProcessingInstancePolicy",
+                    PolicyDocument={
+                        "Version": "2012-10-17",
+                        "Statement": [{
+                            "Action": [
+                                "ecs:CreateCluster",
+                                "ecs:RegisterContainerInstance",
+                                "ecs:DeregisterContainerInstance",
+                                "ecs:DiscoverPollEndpoint",
+                                "ecs:Submit*",
+                                "ecr:*",
+                                "ecs:Poll",
+                                "ecs:StartTelemetrySession",
+                                "ecs:SubmitContainerStateChange",
+                                "ecs:SubmitTaskStateChange",
+                            ],
+                            "Effect": "Allow",
+                            "Resource": "*"
+                        }]
+                    }
+                ),
+                ts.iam.Policy(
+                    PolicyName="ImageProcessingInstancePolicyS3Files",
+                    PolicyDocument={
+                        "Version": "2012-10-17",
+                        "Statement": [{
+                            "Action": ["s3:GetObject", "s3:ListBucket"],
+                            "Effect": "Allow",
+                            "Resource": [
+                                "arn:aws:s3:::%s" % self.image_processing_files_bucket_name,  # TODO
+                                "arn:aws:s3:::%s/*" % self.image_processing_files_bucket_name,
+                                "arn:aws:s3:::%s" % self.user_image_uploads_bucket_name,
+                                "arn:aws:s3:::%s/*" % self.user_image_uploads_bucket_name,
+                            ]
+                        }]
+                    }
+                ),
+                ts.iam.Policy(
+                    PolicyName="ImageProcessingInstancePolicyS3UserUploads",
+                    PolicyDocument={
+                        "Version": "2012-10-17",
+                        "Statement": [{
+                            "Action": ["s3:PutObject"],
+                            "Effect": "Allow",
+                            "Resource": [
+                                "arn:aws:s3:::%s/*" % self.image_processing_results_bucket_name,
+                            ]
+                        }]
+                    }
+                ),
+            ]
+        ))
+
+        self.image_processing_instance_profile = self._res(ts.iam.InstanceProfile(
+            "ImageProcessingInstanceProfile",
+            Path="/",
+            Roles=[self.image_processing_instance_role.ref()]
         ))
 
         """
@@ -448,24 +559,20 @@ class BackendTemplateFactory:
         ))
         """
 
-        self.image_processing_instance_profile = self._res(ts.iam.InstanceProfile(
-            "ImageProcessingInstanceProfile",
-            Path="/",
-            Roles=[self.image_processing_instance_role.ref()]
-        ))
-
         # Create load balancer
         self.image_processing_load_balancer_sg = self._res(ts.ec2.SecurityGroup(
             "ImageProcessingLoadBalancerSG",
             GroupDescription="Allow TCP traffic on 8080",
             VpcId=self.vpc.ref(),
-            SecurityGroupIngress=[ts.ec2.SecurityGroupRule(
-                "ImageProcessingLoadBalancerSGIngress",
-                CidrIp="0.0.0.0/0",
-                IpProtocol="tcp",
-                FromPort=8080,
-                ToPort=8080
-            )]
+            SecurityGroupIngress=[
+                ts.ec2.SecurityGroupRule(
+                    "ImageProcessingLoadBalancerSGIngress",
+                    CidrIp="0.0.0.0/0",
+                    IpProtocol="tcp",
+                    FromPort=8080,
+                    ToPort=8080
+                ),
+            ]
         ))
 
         self.image_processing_load_balancer = self._res(ts.elasticloadbalancing.LoadBalancer(
@@ -480,7 +587,7 @@ class BackendTemplateFactory:
             SecurityGroups=[self.image_processing_load_balancer_sg.ref()],
             HealthCheck=ts.elasticloadbalancing.HealthCheck(
                 # Make an invalid segment request, TODO: Do it properly?
-                Target="HTTP:8080/segment/invalidurl",
+                Target="HTTP:8080/healthcheck",
                 HealthyThreshold="2",
                 UnhealthyThreshold="10",
                 Interval="30",
@@ -493,14 +600,13 @@ class BackendTemplateFactory:
             "ImageProcessingTaskDefinition",
             ContainerDefinitions=[ts.ecs.ContainerDefinition(
                 Name=self.image_processing_container_name,
-                Cpu=2048,
-                Memory=4096,
                 Essential=True,
                 PortMappings=[ts.ecs.PortMapping(
                     HostPort=8080,
                     ContainerPort=8080
                 )],
-                Image=ts.Sub("${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}", ECRRepoName=self.ecr_repository_name)
+                Image=ts.Sub("${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}",
+                             ECRRepoName=self.ecr_repository_name)
             )]
         ))
 
