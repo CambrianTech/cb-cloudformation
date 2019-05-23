@@ -12,6 +12,7 @@ import troposphere.policies
 import troposphere.ecr
 import troposphere.helpers
 import troposphere.helpers.userdata
+import troposphere.logs
 import awacs
 import awacs.iam
 import awacs.s3
@@ -318,6 +319,8 @@ class BackendTemplateFactory:
                                     "#!/bin/bash\n",
                                     "echo ECS_CLUSTER=",
                                     self.image_processing_cluster.ref(),
+                                    " >> /etc/ecs/ecs.config\n",
+                                    "echo ECS_ENABLE_CONTAINER_METADATA=1",
                                     " >> /etc/ecs/ecs.config"
                                 ])
                             }
@@ -397,6 +400,7 @@ class BackendTemplateFactory:
                 "ImageProcessingInstanceProfile"),  # TODO: Get from self
             AssociatePublicIpAddress=True,
             SecurityGroups=[self.image_processing_instance_sg.ref()],
+            InstanceMonitoring=True, # necessary for 1 minute metrics (5 minute is default)
             KeyName="imageprocessing-instance"
         ))
 
@@ -489,6 +493,11 @@ class BackendTemplateFactory:
                                 "ecs:StartTelemetrySession",
                                 "ecs:SubmitContainerStateChange",
                                 "ecs:SubmitTaskStateChange",
+                                "cloudwatch:PutMetricData",
+                                "logs:CreateLogGroup",
+                                "logs:CreateLogStream",
+                                "logs:PutLogEvents",
+                                "logs:DescribeLogStreams",
                             ],
                             "Effect": "Allow",
                             "Resource": "*"
@@ -596,6 +605,15 @@ class BackendTemplateFactory:
             Tags=self.tags_stack_id
         ))
 
+        self.image_processing_log_group = self._res(ts.logs.LogGroup(
+            "ImageProcessingLogGroup",
+            LogGroupName=ts.Join("-", [
+                "ImageProcessingLogGroup",
+                ts.Ref(ts.AWS_STACK_NAME)
+            ]),
+            RetentionInDays=14
+        ))
+
         self.image_processing_task_def = self._res(ts.ecs.TaskDefinition(
             "ImageProcessingTaskDefinition",
             ContainerDefinitions=[ts.ecs.ContainerDefinition(
@@ -605,8 +623,17 @@ class BackendTemplateFactory:
                     HostPort=8080,
                     ContainerPort=8080
                 )],
+                MemoryReservation=4096,
                 Image=ts.Sub("${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}",
-                             ECRRepoName=self.ecr_repository_name)
+                             ECRRepoName=self.ecr_repository_name),
+                LogConfiguration=ts.ecs.LogConfiguration(
+                    LogDriver="awslogs",
+                    Options={
+                        "awslogs-group": self.image_processing_log_group.ref(),
+                        "awslogs-region": ts.Ref(ts.AWS_REGION),
+                        "awslogs-stream-prefix": "image-processing-service"
+                    }
+                )
             )]
         ))
 
