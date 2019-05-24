@@ -57,12 +57,14 @@ class BackendTemplateFactory:
         # Create subnets
         self.pub_sub = self._res(
             ts.ec2.Subnet("PublicSubnet", CidrBlock="10.0.0.0/24",
-                          VpcId=self.vpc.ref(), Tags=self.tags_stack_id)
+                          VpcId=self.vpc.ref(), Tags=self.tags_stack_id,
+                          AvailabilityZone=ts.Sub("${AWS::Region}a"))
         )
 
-        self.priv_sub = self._res(
-            ts.ec2.Subnet("PrivateSubnet", CidrBlock="10.0.1.0/24",
-                          VpcId=self.vpc.ref(), Tags=self.tags_stack_id)
+        self.pub_sub2 = self._res(
+            ts.ec2.Subnet("PublicSubnet2", CidrBlock="10.0.1.0/24",
+                          VpcId=self.vpc.ref(), Tags=self.tags_stack_id,
+                          AvailabilityZone=ts.Sub("${AWS::Region}b"))
         )
 
         # Create and attach internet gateway to public subnet
@@ -101,6 +103,14 @@ class BackendTemplateFactory:
             ts.ec2.SubnetRouteTableAssociation(
                 "PublicSubnetRouteTableAssociation",
                 SubnetId=self.pub_sub.ref(),
+                RouteTableId=self.pub_route_table.ref()
+            )
+        )
+
+        self.pub_subnet2_route_table_association = self._res(
+            ts.ec2.SubnetRouteTableAssociation(
+                "PublicSubnet2RouteTableAssociation",
+                SubnetId=self.pub_sub2.ref(),
                 RouteTableId=self.pub_route_table.ref()
             )
         )
@@ -390,7 +400,7 @@ class BackendTemplateFactory:
 
         self.image_processing_auto_scaling_group = self._res(ts.autoscaling.AutoScalingGroup(
             "ImageProcessingAutoScalingGroup",
-            VPCZoneIdentifier=[self.pub_sub.ref()],
+            VPCZoneIdentifier=[self.pub_sub.ref(), self.pub_sub2.ref()],
             LaunchConfigurationName=self.image_processing_launch_config.ref(),
             MinSize=1,
             MaxSize=2,  # TODO: Parameter for this?
@@ -571,7 +581,7 @@ class BackendTemplateFactory:
         self.image_processing_load_balancer = self._res(ts.elasticloadbalancing.LoadBalancer(
             "ImageProcessingLoadBalancer",
             DependsOn=[self.image_processing_load_balancer_sg.title],
-            Subnets=[self.pub_sub.ref()],
+            Subnets=[self.pub_sub.ref(), self.pub_sub2.ref()],
             Listeners=[ts.elasticloadbalancing.Listener(
                 LoadBalancerPort=8080,
                 InstancePort=8080,
