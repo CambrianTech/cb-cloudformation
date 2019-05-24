@@ -407,7 +407,7 @@ class BackendTemplateFactory:
             LaunchConfigurationName=self.image_processing_launch_config.ref(),
             MinSize=1,
             MaxSize=2,  # TODO: Parameter for this?
-            DesiredCapacity=2,  # TODO: Parameter for this?
+            DesiredCapacity=1,  # TODO: Parameter for this?
 
             # Wait 5 minutes before timing out when not receiving health signal
             CreationPolicy=ts.policies.CreationPolicy(
@@ -638,7 +638,7 @@ class BackendTemplateFactory:
             "ImageProcessingService",
             DependsOn=self.image_processing_auto_scaling_group.title,
             Cluster=self.image_processing_cluster.ref(),
-            DesiredCount=2,
+            DesiredCount=1,
             DeploymentConfiguration=ts.ecs.DeploymentConfiguration(
                 MaximumPercent=100,
                 MinimumHealthyPercent=0  # 0% Needed for dev updates
@@ -721,6 +721,23 @@ class BackendTemplateFactory:
         )
 
     def _create_scaling(self):
+        # Create scaling policies
+        self.image_processing_scale_up_policy = self._res(ts.autoscaling.ScalingPolicy(
+            "ImageProcessingScaleUpPolicy",
+            AutoScalingGroupName=self.image_processing_auto_scaling_group.ref(),
+            AdjustmentType="ChangeInCapacity",
+            Cooldown=1,
+            ScalingAdjustment=1
+        ))
+
+        self.image_processing_scale_down_policy = self._res(ts.autoscaling.ScalingPolicy(
+            "ImageProcessingScaleDownPolicy",
+            AutoScalingGroupName=self.image_processing_auto_scaling_group.ref(),
+            AdjustmentType="ChangeInCapacity",
+            Cooldown=1,
+            ScalingAdjustment=-1
+        ))
+
         # Create alarms
         self.image_processing_scale_up_alarm = self._res(ts.cloudwatch.Alarm(
             "ImageProcessingScaleUpAlarm",
@@ -733,13 +750,14 @@ class BackendTemplateFactory:
                 Value=ts.Select(1, ts.Split("/", self.image_processing_cluster.get_att("Arn"))))],
             Statistic="Average",
             Period=60,
-            EvaluationPeriods=1
+            EvaluationPeriods=1,
+            AlarmActions=[self.image_processing_scale_up_policy.ref()]
         ))
 
         self.image_processing_scale_down_alarm = self._res(ts.cloudwatch.Alarm(
             "ImageProcessingScaleDownAlarm",
             ComparisonOperator="LessThanThreshold",
-            Threshold=1,
+            Threshold=3,
             Namespace="ImageProcessingService",
             MetricName="PipelineWaitingItems",
             Dimensions=[ts.cloudwatch.MetricDimension(
@@ -747,7 +765,8 @@ class BackendTemplateFactory:
                 Value=ts.Select(1, ts.Split("/", self.image_processing_cluster.get_att("Arn"))))],
             Statistic="Average",
             Period=60,
-            EvaluationPeriods=2
+            EvaluationPeriods=2,
+            AlarmActions=[self.image_processing_scale_down_policy.ref()]
         ))
 
 
