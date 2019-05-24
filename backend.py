@@ -38,6 +38,7 @@ class BackendTemplateFactory:
         self._create_presigned_url_lambda()
         self._create_api_gateway()
         self._create_cluster()
+        self._create_api_stage()
 
         return self.template
 
@@ -258,23 +259,6 @@ class BackendTemplateFactory:
                         StatusCode="200"
                     )
                 ]
-            )
-        )
-
-        self.api_deployment = self._res(
-            ts.apigateway.Deployment(
-                "RestApiDeployment",
-                DependsOn=self.api_get_presigned_method.title,
-                RestApiId=self.rest_api.ref()
-            )
-        )
-
-        self.api_stage = self._res(
-            ts.apigateway.Stage(
-                "RestApiStage",
-                StageName="v1",
-                RestApiId=self.rest_api.ref(),
-                DeploymentId=self.api_deployment.ref()
             )
         )
 
@@ -655,6 +639,72 @@ class BackendTemplateFactory:
             Role=self.image_processing_service_role.ref(),
             TaskDefinition=self.image_processing_task_def.ref()
         ))
+
+        # Wire up load balancer with api gateway (url/ImageProcessing/*)
+        self.api_image_processing = self._res(
+            ts.apigateway.Resource(
+                "ImageProcessingRestApiResource",
+                ParentId=self.rest_api.get_att("RootResourceId"),
+                RestApiId=self.rest_api.ref(),
+                PathPart="ImageProcessing"
+            )
+        )
+
+        self.api_image_processing_proxy = self._res(
+            ts.apigateway.Resource(
+                "ImageProcessingProxyRestApiResource",
+                ParentId=self.api_image_processing.ref(),
+                RestApiId=self.rest_api.ref(),
+                PathPart="{proxy+}"
+            )
+        )
+
+        self.api_image_processing_method = self._res(
+            ts.apigateway.Method(
+                "ImageProcessingMethod",
+                DependsOn=self.image_processing_service.title,
+                HttpMethod="ANY",
+                ResourceId=self.api_image_processing_proxy.ref(),
+                RestApiId=self.rest_api.ref(),
+                AuthorizationType="NONE",
+                RequestParameters={
+                    "method.request.path.proxy": "true",
+                },
+                Integration=ts.apigateway.Integration(
+                    Type="HTTP_PROXY",
+                    IntegrationHttpMethod="ANY",
+                    PassthroughBehavior="WHEN_NO_MATCH",
+                    RequestParameters={
+                        "integration.request.path.proxy": "method.request.path.proxy",
+                    },
+                    Uri=ts.Join("", ["http://", self.image_processing_load_balancer.get_att("DNSName"), ":8080", "/{proxy}"])
+                ),
+                MethodResponses=[
+                    ts.apigateway.MethodResponse(
+                        "ImageProcessingResponse",
+                        StatusCode="200"
+                    )
+                ]
+            )
+        )
+
+    def _create_api_stage(self):
+        self.api_deployment = self._res(
+            ts.apigateway.Deployment(
+                "RestApiDeployment",
+                DependsOn=[self.api_get_presigned_method.title, self.api_image_processing_method.title],
+                RestApiId=self.rest_api.ref()
+            )
+        )
+
+        self.api_stage = self._res(
+            ts.apigateway.Stage(
+                "RestApiStage",
+                StageName="v1",
+                RestApiId=self.rest_api.ref(),
+                DeploymentId=self.api_deployment.ref()
+            )
+        )
 
 
 def main():
