@@ -13,6 +13,7 @@ import troposphere.ecr
 import troposphere.helpers
 import troposphere.helpers.userdata
 import troposphere.logs
+import troposphere.cloudwatch
 import awacs
 import awacs.iam
 import awacs.s3
@@ -39,6 +40,7 @@ class BackendTemplateFactory:
         self._create_api_gateway()
         self._create_cluster()
         self._create_api_stage()
+        self._create_scaling()
 
         return self.template
 
@@ -394,7 +396,8 @@ class BackendTemplateFactory:
                 "ImageProcessingInstanceProfile"),  # TODO: Get from self
             AssociatePublicIpAddress=True,
             SecurityGroups=[self.image_processing_instance_sg.ref()],
-            InstanceMonitoring=True, # necessary for 1 minute metrics (5 minute is default)
+            # necessary for 1 minute metrics (5 minute is default)
+            InstanceMonitoring=True,
             KeyName="imageprocessing-instance"
         ))
 
@@ -404,7 +407,7 @@ class BackendTemplateFactory:
             LaunchConfigurationName=self.image_processing_launch_config.ref(),
             MinSize=1,
             MaxSize=2,  # TODO: Parameter for this?
-            DesiredCapacity=1,  # TODO: Parameter for this?
+            DesiredCapacity=2,  # TODO: Parameter for this?
 
             # Wait 5 minutes before timing out when not receiving health signal
             CreationPolicy=ts.policies.CreationPolicy(
@@ -589,11 +592,10 @@ class BackendTemplateFactory:
             )],
             SecurityGroups=[self.image_processing_load_balancer_sg.ref()],
             HealthCheck=ts.elasticloadbalancing.HealthCheck(
-                # Make an invalid segment request, TODO: Do it properly?
                 Target="HTTP:8080/healthcheck",
                 HealthyThreshold="2",
                 UnhealthyThreshold="10",
-                Interval="30",
+                Interval="45",
                 Timeout=5
             ),
             Tags=self.tags_stack_id
@@ -636,7 +638,7 @@ class BackendTemplateFactory:
             "ImageProcessingService",
             DependsOn=self.image_processing_auto_scaling_group.title,
             Cluster=self.image_processing_cluster.ref(),
-            DesiredCount=1,
+            DesiredCount=2,
             DeploymentConfiguration=ts.ecs.DeploymentConfiguration(
                 MaximumPercent=100,
                 MinimumHealthyPercent=0  # 0% Needed for dev updates
@@ -687,7 +689,8 @@ class BackendTemplateFactory:
                     RequestParameters={
                         "integration.request.path.proxy": "method.request.path.proxy",
                     },
-                    Uri=ts.Join("", ["http://", self.image_processing_load_balancer.get_att("DNSName"), ":8080", "/{proxy}"])
+                    Uri=ts.Join("", [
+                                "http://", self.image_processing_load_balancer.get_att("DNSName"), ":8080", "/{proxy}"])
                 ),
                 MethodResponses=[
                     ts.apigateway.MethodResponse(
@@ -702,7 +705,8 @@ class BackendTemplateFactory:
         self.api_deployment = self._res(
             ts.apigateway.Deployment(
                 "RestApiDeployment",
-                DependsOn=[self.api_get_presigned_method.title, self.api_image_processing_method.title],
+                DependsOn=[self.api_get_presigned_method.title,
+                           self.api_image_processing_method.title],
                 RestApiId=self.rest_api.ref()
             )
         )
@@ -715,6 +719,36 @@ class BackendTemplateFactory:
                 DeploymentId=self.api_deployment.ref()
             )
         )
+
+    def _create_scaling(self):
+        # Create alarms
+        self.image_processing_scale_up_alarm = self._res(ts.cloudwatch.Alarm(
+            "ImageProcessingScaleUpAlarm",
+            ComparisonOperator="GreaterThanOrEqualToThreshold",
+            Threshold=10,
+            Namespace="ImageProcessingService",
+            MetricName="PipelineWaitingItems",
+            Dimensions=[ts.cloudwatch.MetricDimension(
+                Name="ClusterName",
+                Value=ts.Select(1, ts.Split("/", self.image_processing_cluster.get_att("Arn"))))],
+            Statistic="Average",
+            Period=60,
+            EvaluationPeriods=1
+        ))
+
+        self.image_processing_scale_down_alarm = self._res(ts.cloudwatch.Alarm(
+            "ImageProcessingScaleDownAlarm",
+            ComparisonOperator="LessThanThreshold",
+            Threshold=1,
+            Namespace="ImageProcessingService",
+            MetricName="PipelineWaitingItems",
+            Dimensions=[ts.cloudwatch.MetricDimension(
+                Name="ClusterName",
+                Value=ts.Select(1, ts.Split("/", self.image_processing_cluster.get_att("Arn"))))],
+            Statistic="Average",
+            Period=60,
+            EvaluationPeriods=2
+        ))
 
 
 def main():
