@@ -14,19 +14,20 @@ import troposphere.helpers
 import troposphere.helpers.userdata
 import troposphere.logs
 import troposphere.cloudwatch
-import awacs
-import awacs.iam
-import awacs.s3
+import troposphere.applicationautoscaling
 
 
 class BackendTemplateFactory:
     presigned_url_fn_name = "GetImageUploadPresignedUrl"
     image_processing_container_name = "ImageProcessingContainer"
-    ecr_repository_name = "image-processing-backend:latest"
 
+    ecr_repository_name = "cb-imageprocessingservice-gpu:latest"
     image_processing_files_bucket_name = "cb-imageprocessingservice"
     user_image_uploads_bucket_name = "cb-user-image-uploads"
     image_processing_results_bucket_name = "cb-imageprocessingservice-results"
+
+    scale_up_threshold = 10
+    scale_down_threshold = 3
 
     def create_template(self) -> ts.Template:
         self.template = ts.Template("Cambrian image processing backend")
@@ -283,10 +284,10 @@ class BackendTemplateFactory:
 
         self.image_processing_instance_id_mapping = self._map("ImageProcessingInstanceId", {
             # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/launch_container_instance.html
-            "us-east-1": {"AMI": "ami-00cf4737e238866a3"},
-            "us-east-2": {"AMI": "ami-012ca23958772cf72"},
-            "us-west-1": {"AMI": "ami-06d87f0156b1d4407"},
-            "us-west-2": {"AMI": "ami-0a9f5be2a016dccad"},
+            "us-east-1": {"AMI": "ami-0b0ae551a867891da"},
+            "us-east-2": {"AMI": "ami-0f132b270b9aabeca"},
+            "us-west-1": {"AMI": "ami-0ca127ab2bfadf65d"},
+            "us-west-2": {"AMI": "ami-083612cfef21db11d"},
         })
 
         self.image_processing_instance_sg = self._res(ts.ec2.SecurityGroup(
@@ -344,6 +345,13 @@ class BackendTemplateFactory:
                                     "runas=root\n"
                                 )),
                             ),
+                            "/etc/docker/daemon.json": ts.cloudformation.InitFile(
+                                content=ts.Join("\n", [
+                                    "{",
+                                    '"default-runtime": "nvidia"',
+                                    "}"
+                                ])
+                            )
                         }),
                         services={
                             "sysvinit": {
@@ -367,7 +375,7 @@ class BackendTemplateFactory:
             ),
             ImageId=ts.FindInMap("ImageProcessingInstanceId", ts.Ref(
                 ts.AWS_REGION), "AMI"),  # TODO: Map name automatic
-            InstanceType="t2.large",
+            InstanceType="p2.xlarge",
             UserData=ts.Base64(
                 # https://github.com/DiUS/cloudformation-templates/blob/b0dbf24f62dfa7c6867908cda168598f318bd6e3/ECS/ecs-cluster.template#L341-L365
                 ts.Join("", [
@@ -394,11 +402,11 @@ class BackendTemplateFactory:
             ),
             IamInstanceProfile=ts.Ref(
                 "ImageProcessingInstanceProfile"),  # TODO: Get from self
-            AssociatePublicIpAddress=True,
             SecurityGroups=[self.image_processing_instance_sg.ref()],
             # necessary for 1 minute metrics (5 minute is default)
             InstanceMonitoring=True,
-            KeyName="imageprocessing-instance"
+            AssociatePublicIpAddress=True,
+            #KeyName="imageprocessing-instance"
         ))
 
         self.image_processing_auto_scaling_group = self._res(ts.autoscaling.AutoScalingGroup(
@@ -620,6 +628,9 @@ class BackendTemplateFactory:
                     ContainerPort=8080
                 )],
                 MemoryReservation=4096,
+                # Can't specify GPU requirements yet (see https://github.com/aws/containers-roadmap/issues/223).
+                # Use a requirements of 4 CPUs meanwhile (as many as a p2.xlarge has)
+                Cpu=4096,
                 Image=ts.Sub("${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}",
                              ECRRepoName=self.ecr_repository_name),
                 LogConfiguration=ts.ecs.LogConfiguration(
@@ -721,12 +732,102 @@ class BackendTemplateFactory:
         )
 
     def _create_scaling(self):
-        # Create scaling policies
+        # Create role and target needed for container scaling
+        self.image_processing_container_scaling_role = self._res(ts.iam.Role(
+            "ImageProcessingContainerScalingRole",
+            Path="/",
+            Policies=[
+                ts.iam.Policy(
+                    PolicyName="ImageProcessingContainerScalingRolePolicy",
+                    PolicyDocument={
+                        "Version": "2012-10-17",
+                        "Statement": [{
+                            "Action": [
+                                "ecs:UpdateService",
+                                "ecs:DescribeServices",
+                                "application-autoscaling:*",
+                                "cloudwatch:DescribeAlarms",
+                                "cloudwatch:GetMetricStatistics",
+                            ],
+                            "Effect": "Allow",
+                            "Resource": "*",
+                        }]
+                    }
+                )
+            ],
+            AssumeRolePolicyDocument={
+                "Version": "2012-10-17",
+                "Statement": [{
+                    "Action": ["sts:AssumeRole"],
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": ["application-autoscaling.amazonaws.com"]
+                    }
+                }]
+            },
+        ))
+
+        self.image_processing_container_scaling_target = self._res(ts.applicationautoscaling.ScalableTarget(
+            "ImageProcessingContainerScalingTarget",
+            MinCapacity=1,
+            MaxCapacity=2,
+            ScalableDimension="ecs:service:DesiredCount",
+            ServiceNamespace="ecs",
+            ResourceId=ts.Join("/", [
+                "service",
+                self.image_processing_cluster.ref(),
+                self.image_processing_service.get_att("Name")
+            ]),
+            RoleARN=self.image_processing_container_scaling_role.get_att("Arn")
+        ))
+
+        # Create container scaling policy
+        self.image_processing_container_scale_up_policy = self._res(ts.applicationautoscaling.ScalingPolicy(
+            "ImageProcessingContainerScaleUpPolicy",
+            PolicyName="ImageProcessingContainerScaleUpPolicy",
+            PolicyType="StepScaling",
+            ScalingTargetId=self.image_processing_container_scaling_target.ref(),
+            ScalableDimension="ecs:service:DesiredCount",
+            ServiceNamespace="ecs",
+            StepScalingPolicyConfiguration=ts.applicationautoscaling.StepScalingPolicyConfiguration(
+                AdjustmentType="ChangeInCapacity",
+                Cooldown=60,
+                MetricAggregationType="Average",
+                StepAdjustments=[
+                    ts.applicationautoscaling.StepAdjustment(
+                        MetricIntervalLowerBound=0, # Relative to alarm value
+                        ScalingAdjustment=1
+                    )
+                ]
+            )
+        ))
+
+        self.image_processing_container_scale_down_policy = self._res(ts.applicationautoscaling.ScalingPolicy(
+            "ImageProcessingContainerScaleDownPolicy",
+            PolicyName="ImageProcessingContainerScaleDownPolicy",
+            PolicyType="StepScaling",
+            ScalingTargetId=self.image_processing_container_scaling_target.ref(),
+            ScalableDimension="ecs:service:DesiredCount",
+            ServiceNamespace="ecs",
+            StepScalingPolicyConfiguration=ts.applicationautoscaling.StepScalingPolicyConfiguration(
+                AdjustmentType="ChangeInCapacity",
+                Cooldown=60,
+                MetricAggregationType="Average",
+                StepAdjustments=[
+                    ts.applicationautoscaling.StepAdjustment(
+                        MetricIntervalUpperBound=0, # Relative to alarm value
+                        ScalingAdjustment=-1
+                    )
+                ]
+            )
+        ))
+
+        # Create instance scaling policies
         self.image_processing_scale_up_policy = self._res(ts.autoscaling.ScalingPolicy(
             "ImageProcessingScaleUpPolicy",
             AutoScalingGroupName=self.image_processing_auto_scaling_group.ref(),
             AdjustmentType="ChangeInCapacity",
-            Cooldown=1,
+            Cooldown=60,
             ScalingAdjustment=1
         ))
 
@@ -734,7 +835,7 @@ class BackendTemplateFactory:
             "ImageProcessingScaleDownPolicy",
             AutoScalingGroupName=self.image_processing_auto_scaling_group.ref(),
             AdjustmentType="ChangeInCapacity",
-            Cooldown=1,
+            Cooldown=60,
             ScalingAdjustment=-1
         ))
 
@@ -742,7 +843,7 @@ class BackendTemplateFactory:
         self.image_processing_scale_up_alarm = self._res(ts.cloudwatch.Alarm(
             "ImageProcessingScaleUpAlarm",
             ComparisonOperator="GreaterThanOrEqualToThreshold",
-            Threshold=10,
+            Threshold=self.scale_up_threshold,
             Namespace="ImageProcessingService",
             MetricName="PipelineWaitingItems",
             Dimensions=[ts.cloudwatch.MetricDimension(
@@ -751,13 +852,16 @@ class BackendTemplateFactory:
             Statistic="Average",
             Period=60,
             EvaluationPeriods=1,
-            AlarmActions=[self.image_processing_scale_up_policy.ref()]
+            AlarmActions=[
+                self.image_processing_container_scale_up_policy.ref(),
+                self.image_processing_scale_up_policy.ref()
+            ]
         ))
 
         self.image_processing_scale_down_alarm = self._res(ts.cloudwatch.Alarm(
             "ImageProcessingScaleDownAlarm",
             ComparisonOperator="LessThanThreshold",
-            Threshold=3,
+            Threshold=self.scale_down_threshold,
             Namespace="ImageProcessingService",
             MetricName="PipelineWaitingItems",
             Dimensions=[ts.cloudwatch.MetricDimension(
@@ -766,7 +870,10 @@ class BackendTemplateFactory:
             Statistic="Average",
             Period=60,
             EvaluationPeriods=2,
-            AlarmActions=[self.image_processing_scale_down_policy.ref()]
+            AlarmActions=[
+                self.image_processing_container_scale_down_policy.ref(),
+                self.image_processing_scale_down_policy.ref()
+            ]
         ))
 
 
