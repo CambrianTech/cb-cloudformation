@@ -284,10 +284,9 @@ class BackendTemplateFactory:
 
         self.image_processing_instance_id_mapping = self._map("ImageProcessingInstanceId", {
             # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/launch_container_instance.html
-            "us-east-1": {"AMI": "ami-0b0ae551a867891da"},
-            "us-east-2": {"AMI": "ami-0f132b270b9aabeca"},
-            "us-west-1": {"AMI": "ami-0ca127ab2bfadf65d"},
-            "us-west-2": {"AMI": "ami-083612cfef21db11d"},
+            # base: ami-0b0ae551a867891da
+            "us-east-1": {"AMI": "ami-0e42ab1386f42d461"},
+            # TODO: Build more custom AMIs and add them here
         })
 
         self.image_processing_instance_sg = self._res(ts.ec2.SecurityGroup(
@@ -345,13 +344,6 @@ class BackendTemplateFactory:
                                     "runas=root\n"
                                 )),
                             ),
-                            "/etc/docker/daemon.json": ts.cloudformation.InitFile(
-                                content=ts.Join("\n", [
-                                    "{",
-                                    '"default-runtime": "nvidia"',
-                                    "}"
-                                ])
-                            )
                         }),
                         services={
                             "sysvinit": {
@@ -406,7 +398,7 @@ class BackendTemplateFactory:
             # necessary for 1 minute metrics (5 minute is default)
             InstanceMonitoring=True,
             AssociatePublicIpAddress=True,
-            #KeyName="imageprocessing-instance"
+            # KeyName="imageprocessing-instance"
         ))
 
         self.image_processing_auto_scaling_group = self._res(ts.autoscaling.AutoScalingGroup(
@@ -795,7 +787,7 @@ class BackendTemplateFactory:
                 MetricAggregationType="Average",
                 StepAdjustments=[
                     ts.applicationautoscaling.StepAdjustment(
-                        MetricIntervalLowerBound=0, # Relative to alarm value
+                        MetricIntervalLowerBound=0,  # Relative to alarm value
                         ScalingAdjustment=1
                     )
                 ]
@@ -815,7 +807,7 @@ class BackendTemplateFactory:
                 MetricAggregationType="Average",
                 StepAdjustments=[
                     ts.applicationautoscaling.StepAdjustment(
-                        MetricIntervalUpperBound=0, # Relative to alarm value
+                        MetricIntervalUpperBound=0,  # Relative to alarm value
                         ScalingAdjustment=-1
                     )
                 ]
