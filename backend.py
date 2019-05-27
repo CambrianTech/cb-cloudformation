@@ -367,7 +367,7 @@ class BackendTemplateFactory:
             ),
             ImageId=ts.FindInMap("ImageProcessingInstanceId", ts.Ref(
                 ts.AWS_REGION), "AMI"),  # TODO: Map name automatic
-            InstanceType="p2.xlarge",
+            InstanceType="g3.4xlarge",
             UserData=ts.Base64(
                 # https://github.com/DiUS/cloudformation-templates/blob/b0dbf24f62dfa7c6867908cda168598f318bd6e3/ECS/ecs-cluster.template#L341-L365
                 ts.Join("", [
@@ -621,8 +621,8 @@ class BackendTemplateFactory:
                 )],
                 MemoryReservation=4096,
                 # Can't specify GPU requirements yet (see https://github.com/aws/containers-roadmap/issues/223).
-                # Use a requirements of 4 CPUs meanwhile (as many as a p2.xlarge has)
-                Cpu=4096,
+                # Use a requirements of 16 CPUs meanwhile (as many as a g3.4xlarge has)
+                Cpu=16*1024,
                 Image=ts.Sub("${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}",
                              ECRRepoName=self.ecr_repository_name),
                 LogConfiguration=ts.ecs.LogConfiguration(
