@@ -20,9 +20,11 @@ function makeId(length) {
 }
 
 exports.handler = (event, context, callback) => {
+    const key = makeId(32)
+
     const url = s3.getSignedUrl('putObject', {
         Bucket: process.env.BUCKET,
-        Key: makeId(32),
+        Key: key,
         Expires: 1000, //expiry time in sec
     });
 
@@ -37,7 +39,8 @@ exports.handler = (event, context, callback) => {
     }
 
     var responseBody = {
-        signed_url: url,
+        signedUrl: url,
+        s3Key: key
     };
     
     var response = {
@@ -46,7 +49,7 @@ exports.handler = (event, context, callback) => {
         body: JSON.stringify(responseBody)
     };
 
-    console.log("response: " + JSON.stringify(response))
+    console.log("Response: " + JSON.stringify(response))
 
     callback(null, response);
 };
