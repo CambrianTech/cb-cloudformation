@@ -180,7 +180,7 @@ class BackendTemplateFactory:
                             "Statement": [{
                                 "Action": ["s3:PutObject"],
                                 "Effect": "Allow",
-                                "Resource": "arn:aws:s3:::%s/*" % self.image_processing_results_bucket_name,
+                                "Resource": "arn:aws:s3:::%s/*" % self.user_image_uploads_bucket_name,
                             }]
                         }
                     )
