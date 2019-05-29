@@ -45,7 +45,10 @@ exports.handler = (event, context, callback) => {
     
     var response = {
         statusCode: responseCode,
-        headers: {},
+        headers: {
+            "Content-Type": "application/json", 
+            "Access-Control-Allow-Origin": "*" 
+        },
         body: JSON.stringify(responseBody)
     };
 
