@@ -21,11 +21,6 @@ class BackendTemplateFactory:
     presigned_url_fn_name = "GetImageUploadPresignedUrl"
     image_processing_container_name = "ImageProcessingContainer"
 
-    ecr_repository_name = "cb-imageprocessingservice-gpu:latest"
-    image_processing_files_bucket_name = "cb-imageprocessingservice"
-    user_image_uploads_bucket_name = "cb-user-image-uploads"
-    image_processing_results_bucket_name = "cb-imageprocessingservice-results"
-
     scale_up_threshold = 10
     scale_down_threshold = 3
 
@@ -34,6 +29,8 @@ class BackendTemplateFactory:
 
         self.ref_stack_id = ts.Ref("AWS::StackId")
         self.tags_stack_id = ts.Tags(Application=self.ref_stack_id)
+
+        self._create_parameters()
 
         self._create_vpc()
         self._create_s3_buckets()
@@ -50,6 +47,35 @@ class BackendTemplateFactory:
 
     def _map(self, name, mapping):
         return self.template.add_mapping(name, mapping)
+
+    def _create_parameters(self):
+        self.param_ecr_repository_name = self.template.add_parameter(ts.Parameter(
+            "ImageProcessingServiceRepository",
+            Type="String",
+            Default="cb-imageprocessingservice-gpu:latest",
+            Description="ECR Repository for the docker image to use."
+        ))
+
+        self.param_image_processing_files_bucket_name = self.template.add_parameter(ts.Parameter(
+            "ImageProcessingFilesBucket",
+            Type="String",
+            Default="cb-imageprocessingservice",
+            Description="S3 bucket with the files (models etc.) that the container will download on startup."
+        ))
+
+        self.param_user_image_uploads_bucket_name = self.template.add_parameter(ts.Parameter(
+            "ImageProcessingUserImageUploadsBucket",
+            Type="String",
+            Default="cb-user-image-uploads",
+            Description="S3 bucket where user uploaded images will be stored."
+        ))
+
+        self.param_image_processing_results_bucket_name = self.template.add_parameter(ts.Parameter(
+            "ImageProcessingResultsBucket",
+            Type="String",
+            Default="cb-imageprocessingservice-results",
+            Description="S3 bucket where user uploaded images will be stored."
+        ))
 
     def _create_vpc(self):
         # Create VPC
@@ -180,7 +206,7 @@ class BackendTemplateFactory:
                             "Statement": [{
                                 "Action": ["s3:PutObject"],
                                 "Effect": "Allow",
-                                "Resource": "arn:aws:s3:::%s/*" % self.user_image_uploads_bucket_name,
+                                "Resource": ts.Sub("arn:aws:s3:::${UserUploadsBucketName}/*", UserUploadsBucketName=self.param_user_image_uploads_bucket_name.ref()),
                             }]
                         }
                     )
@@ -209,7 +235,7 @@ class BackendTemplateFactory:
                 Handler="index.handler",
                 Environment=ts.awslambda.Environment(
                     Variables={
-                        "BUCKET": self.user_image_uploads_bucket_name
+                        "BUCKET": self.param_user_image_uploads_bucket_name.ref()
                     }
                 ),
                 Role=self.presigned_url_lambda_execution_role.get_att("Arn"),
@@ -509,10 +535,10 @@ class BackendTemplateFactory:
                             "Action": ["s3:GetObject", "s3:ListBucket"],
                             "Effect": "Allow",
                             "Resource": [
-                                "arn:aws:s3:::%s" % self.image_processing_files_bucket_name,  # TODO
-                                "arn:aws:s3:::%s/*" % self.image_processing_files_bucket_name,
-                                "arn:aws:s3:::%s" % self.user_image_uploads_bucket_name,
-                                "arn:aws:s3:::%s/*" % self.user_image_uploads_bucket_name,
+                                ts.Sub("arn:aws:s3:::${FilesBucketName}", FilesBucketName=self.param_image_processing_files_bucket_name.ref()),
+                                ts.Sub("arn:aws:s3:::${FilesBucketName}/*", FilesBucketName=self.param_image_processing_files_bucket_name.ref()),
+                                ts.Sub("arn:aws:s3:::${UserUploadsBucketName}", UserUploadsBucketName=self.param_user_image_uploads_bucket_name.ref()),
+                                ts.Sub("arn:aws:s3:::${UserUploadsBucketName}/*", UserUploadsBucketName=self.param_user_image_uploads_bucket_name.ref()),
                             ]
                         }]
                     }
@@ -525,7 +551,7 @@ class BackendTemplateFactory:
                             "Action": ["s3:PutObject"],
                             "Effect": "Allow",
                             "Resource": [
-                                "arn:aws:s3:::%s/*" % self.image_processing_results_bucket_name,
+                                ts.Sub("arn:aws:s3:::${ResultsBucketName}/*", ResultsBucketName=self.param_image_processing_results_bucket_name.ref()),
                             ]
                         }]
                     }
@@ -624,7 +650,7 @@ class BackendTemplateFactory:
                 # Use a requirements of 16 CPUs meanwhile (as many as a g3.4xlarge has)
                 Cpu=16*1024,
                 Image=ts.Sub("${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}",
-                             ECRRepoName=self.ecr_repository_name),
+                             ECRRepoName=self.param_ecr_repository_name.ref()),
                 LogConfiguration=ts.ecs.LogConfiguration(
                     LogDriver="awslogs",
                     Options={
