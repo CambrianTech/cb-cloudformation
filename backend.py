@@ -52,7 +52,7 @@ class BackendTemplateFactory:
         self.param_ecr_repository_name = self.template.add_parameter(ts.Parameter(
             "ImageProcessingServiceRepository",
             Type="String",
-            Default="cb-imageprocessingservice-gpu:latest",
+            Default="752415772042.dkr.ecr.us-east-1.amazonaws.com/cb-imageprocessingservice-gpu:latest",
             Description="ECR Repository for the docker image to use."
         ))
 
@@ -649,8 +649,7 @@ class BackendTemplateFactory:
                 # Can't specify GPU requirements yet (see https://github.com/aws/containers-roadmap/issues/223).
                 # Use a requirements of 16 CPUs meanwhile (as many as a g3.4xlarge has)
                 Cpu=16*1024,
-                Image=ts.Sub("${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}",
-                             ECRRepoName=self.param_ecr_repository_name.ref()),
+                Image=self.param_ecr_repository_name.ref(),
                 LogConfiguration=ts.ecs.LogConfiguration(
                     LogDriver="awslogs",
                     Options={
