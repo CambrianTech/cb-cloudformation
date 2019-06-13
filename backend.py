@@ -657,7 +657,11 @@ class BackendTemplateFactory:
                         "awslogs-region": ts.Ref(ts.AWS_REGION),
                         "awslogs-stream-prefix": "image-processing-service"
                     }
-                )
+                ),
+                Environment=[
+                    ts.ecs.Environment(Name="USER_UPLOADS_BUCKET", Value=self.param_user_image_uploads_bucket_name.ref()),
+                    ts.ecs.Environment(Name="RESULTS_BUCKET", Value=self.param_image_processing_results_bucket_name.ref()),
+                ]
             )]
         ))
 
