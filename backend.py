@@ -19,6 +19,9 @@ import troposphere.applicationautoscaling
 
 class BackendTemplateFactory:
     presigned_url_fn_name = "GetImageUploadPresignedUrl"
+    preview_presigned_url_fn_name = "GetImagePreviewPresignedUrl"
+    mask_presigned_url_fn_name = "GetImageMaskPresignedUrl"
+
     image_processing_container_name = "ImageProcessingContainer"
 
     scale_up_threshold = 10
@@ -68,6 +71,20 @@ class BackendTemplateFactory:
             Type="String",
             Default="cb-user-image-uploads",
             Description="S3 bucket where user uploaded images will be stored."
+        ))
+
+        self.param_user_mask_uploads_bucket_name = self.template.add_parameter(ts.Parameter(
+            "ImageProcessingUserMaskUploadsBucket",
+            Type="String",
+            Default="cb-user-mask-uploads",
+            Description="S3 bucket where user uploaded masks for images will be stored."
+        ))
+
+        self.param_user_preview_uploads_bucket_name = self.template.add_parameter(ts.Parameter(
+            "ImageProcessingUserPreviewUploadsBucket",
+            Type="String",
+            Default="cb-user-preview-uploads",
+            Description="S3 bucket where user uploaded previews for images will be stored."
         ))
 
         self.param_image_processing_results_bucket_name = self.template.add_parameter(ts.Parameter(
@@ -225,25 +242,34 @@ class BackendTemplateFactory:
         )
 
         # Create lambda function with code loaded from a file
-        with open("getimageuploadpresignedurl.js", "r") as code_file:
-            code_lines = code_file.readlines()
+        def _create_lambda(file_name, fn_name, bucket):
+            with open(file_name, "r") as code_file:
+                code_lines = code_file.readlines()
 
-        self.presigned_url_lambda = self._res(
-            ts.awslambda.Function(
-                self.presigned_url_fn_name,
-                Code=ts.awslambda.Code(ZipFile=ts.Join("", code_lines)),
-                Handler="index.handler",
-                Environment=ts.awslambda.Environment(
-                    Variables={
-                        "BUCKET": self.param_user_image_uploads_bucket_name.ref()
-                    }
-                ),
-                Role=self.presigned_url_lambda_execution_role.get_att("Arn"),
-                Runtime="nodejs8.10",
-                MemorySize=128,  # TODO: Make this param
-                Timeout=3  # TODO: Make this param
+            return self._res(
+                ts.awslambda.Function(
+                    self.presigned_url_fn_name,
+                    Code=ts.awslambda.Code(ZipFile=ts.Join("", code_lines)),
+                    Handler="index.handler",
+                    Environment=ts.awslambda.Environment(
+                        Variables={
+                            "BUCKET": bucket.ref()
+                        }
+                    ),
+                    Role=self.presigned_url_lambda_execution_role.get_att("Arn"),
+                    Runtime="nodejs8.10",
+                    MemorySize=128,  # TODO: Make this param
+                    Timeout=3  # TODO: Make this param
+                )
             )
-        )
+
+        # Image upload
+        self.presigned_url_lambda = _create_lambda("getimageuploadpresignedurl.js", self.presigned_url_fn_name, self.param_user_image_uploads_bucket_name)
+
+        # Related image upload (preview, edited mask)
+        self.preview_presigned_url_lambda = _create_lambda("getimagerelateduploadpresignedurl.js", self.preview_presigned_url_fn_name, self.param_user_preview_uploads_bucket_name)
+        self.mask_presigned_url_lambda = _create_lambda("getimagerelateduploadpresignedurl.js", self.mask_presigned_url_fn_name, self.param_user_mask_uploads_bucket_name)
+
 
     def _create_api_gateway(self):
         # Create REST api
@@ -254,52 +280,59 @@ class BackendTemplateFactory:
             )
         )
 
-        self.api_get_presigned = self._res(
-            ts.apigateway.Resource(
-                "GetImageUploadPresignedUrlRestApiResource",
-                ParentId=self.rest_api.get_att("RootResourceId"),
-                RestApiId=self.rest_api.ref(),
-                PathPart='GetImageUploadPresignedUrl'
+        def _add_lambda(l, name, fn_name):
+            # Create lambda permissions for api gateway
+            permissions = self._res(
+                ts.awslambda.Permission(
+                    "RestApiGet" + name + "PresignedUrlPermissions",
+                    Action="lambda:invokeFunction",
+                    Principal="apigateway.amazonaws.com",
+                    FunctionName=l.get_att("Arn"),
+                    SourceArn=ts.Sub("arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiName}/*/*/${funcName}",
+                                    apiName=self.rest_api.ref(), funcName=fn_name)
+                )
             )
-        )
 
-        # Create lambda permissions for api gateway
-        self.rest_api_get_presigned_permissions = self._res(
-            ts.awslambda.Permission(
-                "RestApiGetPresignedUrlPermissions",
-                Action="lambda:invokeFunction",
-                Principal="apigateway.amazonaws.com",
-                FunctionName=self.presigned_url_lambda.get_att("Arn"),
-                SourceArn=ts.Sub("arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiName}/*/*/${funcName}",
-                                 apiName=self.rest_api.ref(), funcName=self.presigned_url_fn_name)
+            api = self._res(
+                ts.apigateway.Resource(
+                    "Get" + name + "PresignedUrlRestApiResource",
+                    ParentId=self.rest_api.get_att("RootResourceId"),
+                    RestApiId=self.rest_api.ref(),
+                    PathPart='Get' + name + 'PresignedUrl'
+                )
             )
-        )
 
-        self.api_get_presigned_method = self._res(
-            ts.apigateway.Method(
-                "GetImageUploadPresignedUrlRestApiMethod",
-                DependsOn=self.presigned_url_lambda.title,
-                HttpMethod="GET",
-                ResourceId=self.api_get_presigned.ref(),
-                RestApiId=self.rest_api.ref(),
-                AuthorizationType="NONE",
-                Integration=ts.apigateway.Integration(
-                    Type="AWS_PROXY",
-                    IntegrationHttpMethod="POST",
-                    IntegrationResponses=[
-                        ts.apigateway.IntegrationResponse(StatusCode="200")
-                    ],
-                    Uri=ts.Sub("arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations",
-                               lambdaArn=self.presigned_url_lambda.get_att("Arn"))
-                ),
-                MethodResponses=[
-                    ts.apigateway.MethodResponse(
-                        "GetImageUploadPresignedUrlRestApiResponse",
-                        StatusCode="200"
-                    )
-                ]
+            method = self._res(
+                ts.apigateway.Method(
+                    "Get" + name + "PresignedUrlRestApiMethod",
+                    DependsOn=l.title,
+                    HttpMethod="GET",
+                    ResourceId=api.ref(),
+                    RestApiId=self.rest_api.ref(),
+                    AuthorizationType="NONE",
+                    Integration=ts.apigateway.Integration(
+                        Type="AWS_PROXY",
+                        IntegrationHttpMethod="POST",
+                        IntegrationResponses=[
+                            ts.apigateway.IntegrationResponse(StatusCode="200")
+                        ],
+                        Uri=ts.Sub("arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations",
+                                lambdaArn=l.get_att("Arn"))
+                    ),
+                    MethodResponses=[
+                        ts.apigateway.MethodResponse(
+                            "Get" + name + "PresignedUrlRestApiResponse",
+                            StatusCode="200"
+                        )
+                    ]
+                )
             )
-        )
+
+            return permissions, api, method
+
+        self.rest_api_get_presigned_permissions, self.api_get_presigned, self.api_get_presigned_method = _add_lambda(self.presigned_url_lambda, "ImageUpload", self.presigned_url_fn_name)
+        self.rest_api_get_mask_presigned_permissions, self.api_get_mask_presigned, self.api_get_mask_presigned_method = _add_lambda(self.mask_presigned_url_lambda, "MaskUpload", self.mask_presigned_url_fn_name)
+        self.rest_api_get_preview_presigned_permissions, self.api_get_preview_presigned, self.api_get_preview_presigned_method = _add_lambda(self.preview_presigned_url_lambda, "PreviewUpload", self.preview_presigned_url_fn_name)
 
     def _create_cluster(self):
         # Create cluster
@@ -738,6 +771,8 @@ class BackendTemplateFactory:
             ts.apigateway.Deployment(
                 "RestApiDeployment",
                 DependsOn=[self.api_get_presigned_method.title,
+                           self.api_get_mask_presigned_method.title,
+                           self.api_get_preview_presigned_method.title,
                            self.api_image_processing_method.title],
                 RestApiId=self.rest_api.ref()
             )
