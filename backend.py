@@ -19,8 +19,8 @@ import troposphere.applicationautoscaling
 
 class BackendTemplateFactory:
     presigned_url_fn_name = "GetImageUploadPresignedUrl"
-    preview_presigned_url_fn_name = "GetImagePreviewPresignedUrl"
-    mask_presigned_url_fn_name = "GetImageMaskPresignedUrl"
+    preview_presigned_url_fn_name = "GetPreviewUploadPresignedUrl"
+    mask_presigned_url_fn_name = "GetMaskUploadPresignedUrl"
 
     image_processing_container_name = "ImageProcessingContainer"
 
@@ -217,16 +217,38 @@ class BackendTemplateFactory:
                         }
                     ),
                     ts.iam.Policy(
-                        PolicyName="s3UserUpload",
+                        PolicyName="s3UserImageUpload",
                         PolicyDocument={
                             "Version": "2012-10-17",
                             "Statement": [{
                                 "Action": ["s3:PutObject"],
                                 "Effect": "Allow",
-                                "Resource": ts.Sub("arn:aws:s3:::${UserUploadsBucketName}/*", UserUploadsBucketName=self.param_user_image_uploads_bucket_name.ref()),
+                                "Resource": ts.Sub("arn:aws:s3:::${BucketName}/*", BucketName=self.param_user_image_uploads_bucket_name.ref()),
                             }]
                         }
-                    )
+                    ),
+                    ts.iam.Policy(
+                        PolicyName="s3UserMaskUpload",
+                        PolicyDocument={
+                            "Version": "2012-10-17",
+                            "Statement": [{
+                                "Action": ["s3:PutObject"],
+                                "Effect": "Allow",
+                                "Resource": ts.Sub("arn:aws:s3:::${BucketName}/*", BucketName=self.param_user_mask_uploads_bucket_name.ref()),
+                            }]
+                        }
+                    ),
+                    ts.iam.Policy(
+                        PolicyName="s3UserPreviewUpload",
+                        PolicyDocument={
+                            "Version": "2012-10-17",
+                            "Statement": [{
+                                "Action": ["s3:PutObject"],
+                                "Effect": "Allow",
+                                "Resource": ts.Sub("arn:aws:s3:::${BucketName}/*", BucketName=self.param_user_preview_uploads_bucket_name.ref()),
+                            }]
+                        }
+                    ),
                 ],
                 AssumeRolePolicyDocument={
                     "Version": "2012-10-17",
@@ -248,7 +270,7 @@ class BackendTemplateFactory:
 
             return self._res(
                 ts.awslambda.Function(
-                    self.presigned_url_fn_name,
+                    fn_name,
                     Code=ts.awslambda.Code(ZipFile=ts.Join("", code_lines)),
                     Handler="index.handler",
                     Environment=ts.awslambda.Environment(
