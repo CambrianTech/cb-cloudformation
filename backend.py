@@ -364,10 +364,12 @@ class BackendTemplateFactory:
         ))
 
         self.image_processing_instance_id_mapping = self._map("ImageProcessingInstanceId", {
-            # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/launch_container_instance.html
-            # base: ami-0b0ae551a867891da
-            "us-east-1": {"AMI": "ami-0e42ab1386f42d461"},
-            # TODO: Build more custom AMIs and add them here
+            # ECS GPU optimized AMI IDs. Add more regions here if necessary.
+            # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-optimized_AMI.html
+            "us-east-1": {"AMI": "ami-0ef44e0a75d6829cf"},
+            "us-east-2": {"AMI": "ami-039d251a3a98ff3c5"},
+            "us-west-1": {"AMI": "ami-09b77ac8046578a9d"},
+            "us-west-2": {"AMI": "ami-06258b9b43a051f6f"},
         })
 
         self.image_processing_instance_sg = self._res(ts.ec2.SecurityGroup(
@@ -701,9 +703,9 @@ class BackendTemplateFactory:
                     ContainerPort=8080
                 )],
                 MemoryReservation=4096,
-                # Can't specify GPU requirements yet (see https://github.com/aws/containers-roadmap/issues/223).
-                # Use a requirements of 16 CPUs meanwhile (as many as a g3.4xlarge has)
-                Cpu=16*1024,
+                ResourceRequirements=[
+                    ts.ecs.ResourceRequirement(Type="GPU", Value="1")
+                ],
                 Image=self.param_ecr_repository_name.ref(),
                 LogConfiguration=ts.ecs.LogConfiguration(
                     LogDriver="awslogs",
