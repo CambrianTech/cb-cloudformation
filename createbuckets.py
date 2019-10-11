@@ -67,20 +67,16 @@ def _get_cors_config(allowed_methods):
 def main():
     region = input_string("Region?")
 
-    # Create user upload buckets
-    user_upload_buckets = ["user image upload",
-                           "user mask upload", "user preview upload"]
-
     get_cors_config = _get_cors_config(["GET"])
     get_put_cors_config = _get_cors_config(["PUT", "GET"])
 
-    for user_upload_bucket in user_upload_buckets:
-        if input_bool("Create %s?" % user_upload_bucket):
-            bucket_name = input_string(
-                "Name for the %s bucket?" % user_upload_bucket)
+    # Create user upload bucket
+    if input_bool("Create user uploads bucket?"):
+        bucket_name = input_string(
+            "Name for the user uploads bucket?")
 
-            create_bucket(bucket_name, region, get_put_cors_config,
-                          _get_policy(bucket_name))
+        create_bucket(bucket_name, region, get_put_cors_config,
+                      _get_policy(bucket_name))
 
     # Create image processing results bucket
     if input_bool("Create image processing results bucket?"):
