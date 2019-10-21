@@ -28,7 +28,7 @@ function getBadRequestResponse() {
             "Content-Type": "application/json",
             "Access-Control-Allow-Origin": "*"
         },
-        body: JSON.stringify({ error: "Bad request" }))
+        body: JSON.stringify({ error: "Bad request" })
     }
 }
 
