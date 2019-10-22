@@ -214,7 +214,7 @@ class BackendTemplateFactory:
                         }
                     ),
                     Role=self.presigned_url_lambda_execution_role.get_att("Arn"),
-                    Runtime="nodejs8.10",
+                    Runtime="nodejs10.x",
                     MemorySize=128,  # TODO: Make this param
                     Timeout=3  # TODO: Make this param
                 )
