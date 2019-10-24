@@ -7,7 +7,11 @@ const s3 = new AWS.S3({
 });
 
 const imageNameRegex = /^[a-zA-Z0-9]+$/;
+const keyRegex = imageNameRegex;
 const signedUrlExpiryTime = 60 * 60; // Expiry time in seconds
+
+const keyLength = 10;
+const subKeyLength = 8;
 
 function makeId(length) {
     let result = "";
@@ -44,16 +48,34 @@ function getSuccessfulResponse(body) {
 }
 
 exports.handler = async (event) => {
-    console.log(`Request: ${JSON.stringify(event)}`)
+    console.log(`Request: ${JSON.stringify(event)}`);
 
     if (event.queryStringParameters !== null && event.queryStringParameters !== undefined && event.queryStringParameters.imagenames) {
         console.log(`Received imagenames: ${event.queryStringParameters.imagenames}`);
 
-        const key = makeId(32);
+        let uploadUrl = null;
+        let key;
+
+        // If the user didn't pass a key, generate a new one and an upload url for its background image
+        if (event.queryStringParameters.key) {
+            if (!keyRegex.test(event.queryStringParameters.key)) {
+                console.log(`Received bad key: ${event.queryStringParameters.key}`);
+                return getBadRequestResponse();
+            }
+
+            key = event.queryStringParameters.key;
+            uploadUrl = `${key}/${imageName}`;
+        } else {
+            key = makeId(keyLength);
+        }
+
+        // Generate a key for the subdirectory
+        const subKey = makeId(subKeyLength);
 
         const imageNames = event.queryStringParameters.imagenames.split(",").map(name => name.trim());
-        const uploadUrls = [];
+        const subUploadUrls = {};
 
+        // Create signed upload urls for each of the requested images within the sub-directory
         for (const imageName of imageNames) {
             if (!imageNameRegex.test(imageName)) {
                 return getBadRequestResponse();
@@ -61,17 +83,24 @@ exports.handler = async (event) => {
 
             const url = s3.getSignedUrl("putObject", {
                 Bucket: process.env.BUCKET,
-                Key: key + "/" + imageName,
+                Key: `${key}/${subKey}/${imageName}`,
                 Expires: signedUrlExpiryTime,
             });
 
-            uploadUrls.push(url);
+            subUploadUrls[imageName] = url;
         }
 
-        return getSuccessfulResponse({
+        const response = {
             key: key,
-            uploadUrls: uploadUrls,
-        });
+            subKey: subKey,
+            subUploadUrls: subUploadUrls,
+        };
+
+        if (uploadUrl) {
+            response.uploadUrl = uploadUrl;
+        }
+
+        return getSuccessfulResponse(response);
     }
 
     return getBadRequestResponse();
