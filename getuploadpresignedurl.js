@@ -66,9 +66,14 @@ exports.handler = async (event) => {
             }
 
             key = event.queryStringParameters.key;
-            uploadUrl = `${key}/${imageName}`;
         } else {
             key = makeId(keyLength);
+
+            uploadUrl = s3.getSignedUrl("putObject", {
+                Bucket: process.env.BUCKET,
+                Key: `${key}/background`,
+                Expires: signedUrlExpiryTime,
+            });
         }
 
         // Generate a key for the subdirectory
