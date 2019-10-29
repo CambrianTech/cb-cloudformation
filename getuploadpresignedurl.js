@@ -30,7 +30,8 @@ function getBadRequestResponse() {
         statusCode: 400,
         headers: {
             "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*"
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-cache, no-store"
         },
         body: JSON.stringify({ error: "Bad request" })
     }
@@ -41,7 +42,8 @@ function getSuccessfulResponse(body) {
         statusCode: 200,
         headers: {
             "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*"
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-cache, no-store"
         },
         body: JSON.stringify(body)
     }
