@@ -18,9 +18,7 @@ import troposphere.applicationautoscaling
 
 
 class BackendTemplateFactory:
-    presigned_url_fn_name = "GetImageUploadPresignedUrl"
-    preview_presigned_url_fn_name = "GetPreviewUploadPresignedUrl"
-    mask_presigned_url_fn_name = "GetMaskUploadPresignedUrl"
+    presigned_url_fn_name = "GetUserUploadPresignedUrl"
 
     image_processing_container_name = "ImageProcessingContainer"
 
@@ -36,7 +34,6 @@ class BackendTemplateFactory:
         self._create_parameters()
 
         self._create_vpc()
-        self._create_s3_buckets()
         self._create_presigned_url_lambda()
         self._create_api_gateway()
         self._create_cluster()
@@ -66,32 +63,18 @@ class BackendTemplateFactory:
             Description="S3 bucket with the files (models etc.) that the container will download on startup."
         ))
 
-        self.param_user_image_uploads_bucket_name = self.template.add_parameter(ts.Parameter(
-            "ImageProcessingUserImageUploadsBucket",
+        self.param_user_uploads_bucket_name = self.template.add_parameter(ts.Parameter(
+            "ImageProcessingUserUploadsBucket",
             Type="String",
-            Default="cb-user-image-uploads",
-            Description="S3 bucket where user uploaded images will be stored."
-        ))
-
-        self.param_user_mask_uploads_bucket_name = self.template.add_parameter(ts.Parameter(
-            "ImageProcessingUserMaskUploadsBucket",
-            Type="String",
-            Default="cb-user-mask-uploads",
-            Description="S3 bucket where user uploaded masks for images will be stored."
-        ))
-
-        self.param_user_preview_uploads_bucket_name = self.template.add_parameter(ts.Parameter(
-            "ImageProcessingUserPreviewUploadsBucket",
-            Type="String",
-            Default="cb-user-preview-uploads",
-            Description="S3 bucket where user uploaded previews for images will be stored."
+            Default="cb-user-uploads",
+            Description="S3 bucket where user uploaded content will be stored."
         ))
 
         self.param_image_processing_results_bucket_name = self.template.add_parameter(ts.Parameter(
             "ImageProcessingResultsBucket",
             Type="String",
-            Default="cb-imageprocessingservice-results",
-            Description="S3 bucket where user uploaded images will be stored."
+            Default="cb-user-uploads",
+            Description="S3 bucket where processed images will be stored."
         ))
 
     def _create_vpc(self):
@@ -172,37 +155,11 @@ class BackendTemplateFactory:
 
         # TODO: ACL Rules
 
-    def _create_s3_buckets(self):
-        pass
-        """
-        self.user_image_upload_bucket = self._res(
-            ts.s3.Bucket(
-                "CambrianUserImageUploads",
-                AccessControl=ts.s3.Private
-            )
-        )
-
-        self.image_processing_results_bucket = self._res(
-            ts.s3.Bucket(
-                "CambrianImageProcessingResults",
-                AccessControl=ts.s3.PublicRead
-            )
-        )
-
-        # Bucket that stores machine learning models etc.
-        # that are downloaded on startup of an instance.
-        self.image_processing_files_bucket = self._res(
-            ts.s3.Bucket(
-                "CambrianImageProcessingFiles",
-                AccessControl=ts.s3.Private
-            )
-        )"""
-
     def _create_presigned_url_lambda(self):
         # Create lambda execution role with S3 upload rights
         self.presigned_url_lambda_execution_role = self._res(
             ts.iam.Role(
-                "GetImageUploadPresignedUrlExecutionRole",
+                "GetUserUploadPresignedUrlExecutionRole",
                 Path="/",
                 Policies=[
                     ts.iam.Policy(
@@ -217,35 +174,13 @@ class BackendTemplateFactory:
                         }
                     ),
                     ts.iam.Policy(
-                        PolicyName="s3UserImageUpload",
+                        PolicyName="s3UserUpload",
                         PolicyDocument={
                             "Version": "2012-10-17",
                             "Statement": [{
                                 "Action": ["s3:PutObject"],
                                 "Effect": "Allow",
-                                "Resource": ts.Sub("arn:aws:s3:::${BucketName}/*", BucketName=self.param_user_image_uploads_bucket_name.ref()),
-                            }]
-                        }
-                    ),
-                    ts.iam.Policy(
-                        PolicyName="s3UserMaskUpload",
-                        PolicyDocument={
-                            "Version": "2012-10-17",
-                            "Statement": [{
-                                "Action": ["s3:PutObject"],
-                                "Effect": "Allow",
-                                "Resource": ts.Sub("arn:aws:s3:::${BucketName}/*", BucketName=self.param_user_mask_uploads_bucket_name.ref()),
-                            }]
-                        }
-                    ),
-                    ts.iam.Policy(
-                        PolicyName="s3UserPreviewUpload",
-                        PolicyDocument={
-                            "Version": "2012-10-17",
-                            "Statement": [{
-                                "Action": ["s3:PutObject"],
-                                "Effect": "Allow",
-                                "Resource": ts.Sub("arn:aws:s3:::${BucketName}/*", BucketName=self.param_user_preview_uploads_bucket_name.ref()),
+                                "Resource": ts.Sub("arn:aws:s3:::${BucketName}/*", BucketName=self.param_user_uploads_bucket_name.ref()),
                             }]
                         }
                     ),
@@ -279,18 +214,14 @@ class BackendTemplateFactory:
                         }
                     ),
                     Role=self.presigned_url_lambda_execution_role.get_att("Arn"),
-                    Runtime="nodejs8.10",
+                    Runtime="nodejs10.x",
                     MemorySize=128,  # TODO: Make this param
                     Timeout=3  # TODO: Make this param
                 )
             )
 
-        # Image upload
-        self.presigned_url_lambda = _create_lambda("getimageuploadpresignedurl.js", self.presigned_url_fn_name, self.param_user_image_uploads_bucket_name)
-
-        # Related image upload (preview, edited mask)
-        self.preview_presigned_url_lambda = _create_lambda("getimagerelateduploadpresignedurl.js", self.preview_presigned_url_fn_name, self.param_user_preview_uploads_bucket_name)
-        self.mask_presigned_url_lambda = _create_lambda("getimagerelateduploadpresignedurl.js", self.mask_presigned_url_fn_name, self.param_user_mask_uploads_bucket_name)
+        # User upload
+        self.presigned_url_lambda = _create_lambda("getuploadpresignedurl.js", self.presigned_url_fn_name, self.param_user_uploads_bucket_name)
 
 
     def _create_api_gateway(self):
@@ -352,9 +283,7 @@ class BackendTemplateFactory:
 
             return permissions, api, method
 
-        self.rest_api_get_presigned_permissions, self.api_get_presigned, self.api_get_presigned_method = _add_lambda(self.presigned_url_lambda, "ImageUpload", self.presigned_url_fn_name)
-        self.rest_api_get_mask_presigned_permissions, self.api_get_mask_presigned, self.api_get_mask_presigned_method = _add_lambda(self.mask_presigned_url_lambda, "MaskUpload", self.mask_presigned_url_fn_name)
-        self.rest_api_get_preview_presigned_permissions, self.api_get_preview_presigned, self.api_get_preview_presigned_method = _add_lambda(self.preview_presigned_url_lambda, "PreviewUpload", self.preview_presigned_url_fn_name)
+        self.rest_api_get_presigned_permissions, self.api_get_presigned, self.api_get_presigned_method = _add_lambda(self.presigned_url_lambda, "UserUpload", self.presigned_url_fn_name)
 
     def _create_cluster(self):
         # Create cluster
@@ -594,8 +523,8 @@ class BackendTemplateFactory:
                             "Resource": [
                                 ts.Sub("arn:aws:s3:::${FilesBucketName}", FilesBucketName=self.param_image_processing_files_bucket_name.ref()),
                                 ts.Sub("arn:aws:s3:::${FilesBucketName}/*", FilesBucketName=self.param_image_processing_files_bucket_name.ref()),
-                                ts.Sub("arn:aws:s3:::${UserUploadsBucketName}", UserUploadsBucketName=self.param_user_image_uploads_bucket_name.ref()),
-                                ts.Sub("arn:aws:s3:::${UserUploadsBucketName}/*", UserUploadsBucketName=self.param_user_image_uploads_bucket_name.ref()),
+                                ts.Sub("arn:aws:s3:::${UserUploadsBucketName}", UserUploadsBucketName=self.param_user_uploads_bucket_name.ref()),
+                                ts.Sub("arn:aws:s3:::${UserUploadsBucketName}/*", UserUploadsBucketName=self.param_user_uploads_bucket_name.ref()),
                             ]
                         }]
                     }
@@ -716,7 +645,7 @@ class BackendTemplateFactory:
                     }
                 ),
                 Environment=[
-                    ts.ecs.Environment(Name="USER_UPLOADS_BUCKET", Value=self.param_user_image_uploads_bucket_name.ref()),
+                    ts.ecs.Environment(Name="USER_UPLOADS_BUCKET", Value=self.param_user_uploads_bucket_name.ref()),
                     ts.ecs.Environment(Name="RESULTS_BUCKET", Value=self.param_image_processing_results_bucket_name.ref()),
                 ]
             )]
@@ -795,8 +724,6 @@ class BackendTemplateFactory:
             ts.apigateway.Deployment(
                 "RestApiDeployment",
                 DependsOn=[self.api_get_presigned_method.title,
-                           self.api_get_mask_presigned_method.title,
-                           self.api_get_preview_presigned_method.title,
                            self.api_image_processing_method.title],
                 RestApiId=self.rest_api.ref()
             )
