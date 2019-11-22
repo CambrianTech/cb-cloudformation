@@ -66,14 +66,14 @@ class BackendTemplateFactory:
         self.param_user_uploads_bucket_name = self.template.add_parameter(ts.Parameter(
             "ImageProcessingUserUploadsBucket",
             Type="String",
-            Default="cb-user-uploads",
+            Default="cb-user-image-uploads",
             Description="S3 bucket where user uploaded content will be stored."
         ))
 
         self.param_image_processing_results_bucket_name = self.template.add_parameter(ts.Parameter(
             "ImageProcessingResultsBucket",
             Type="String",
-            Default="cb-user-uploads",
+            Default="cb-user-image-uploads",
             Description="S3 bucket where processed images will be stored."
         ))
 
