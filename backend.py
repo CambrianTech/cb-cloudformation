@@ -329,7 +329,8 @@ class BackendTemplateFactory:
                                     self.image_processing_cluster.ref(),
                                     " >> /etc/ecs/ecs.config\n",
                                     "echo ECS_ENABLE_CONTAINER_METADATA=1",
-                                    " >> /etc/ecs/ecs.config"
+                                    " >> /etc/ecs/ecs.config\n",
+                                    "echo 'OPTIONS=\"${OPTIONS} --storage-opt dm.basesize=20G\"' >> /etc/sysconfig/docker\n"
                                 ])
                             }
                         },
