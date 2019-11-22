@@ -295,10 +295,10 @@ class BackendTemplateFactory:
         self.image_processing_instance_id_mapping = self._map("ImageProcessingInstanceId", {
             # ECS GPU optimized AMI IDs. Add more regions here if necessary.
             # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-optimized_AMI.html
-            "us-east-1": {"AMI": "ami-0ef44e0a75d6829cf"},
-            "us-east-2": {"AMI": "ami-039d251a3a98ff3c5"},
-            "us-west-1": {"AMI": "ami-09b77ac8046578a9d"},
-            "us-west-2": {"AMI": "ami-06258b9b43a051f6f"},
+            "us-east-1": {"AMI": "ami-0ca3f30db6994a2ff"},
+            "us-east-2": {"AMI": "ami-0c45dd0e1ef99bcf2"},
+            "us-west-1": {"AMI": "ami-0ddd4f56f0468c9c4"},
+            "us-west-2": {"AMI": "ami-0a36be2e955646bb2"},
         })
 
         self.image_processing_instance_sg = self._res(ts.ec2.SecurityGroup(
