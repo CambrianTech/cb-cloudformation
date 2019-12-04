@@ -380,7 +380,7 @@ class BackendTemplateFactory:
             ),
             ImageId=ts.FindInMap("ImageProcessingInstanceId", ts.Ref(
                 ts.AWS_REGION), "AMI"),  # TODO: Map name automatic
-            InstanceType="g3.4xlarge",
+            InstanceType="g4dn.2xlarge",
             UserData=ts.Base64(
                 # https://github.com/DiUS/cloudformation-templates/blob/b0dbf24f62dfa7c6867908cda168598f318bd6e3/ECS/ecs-cluster.template#L341-L365
                 ts.Join("", [
