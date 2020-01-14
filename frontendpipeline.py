@@ -478,8 +478,9 @@ class FrontendTemplateFactory:
                         "PrimarySource": "SourceArtifact",
                         "ProjectName": project_name,
                         "EnvironmentVariables": ts.Sub(
-                            '[{"name":"ECR_REPOSITORY_URI","value":"${ImageRepoName}","type":"PLAINTEXT"}]',
-                            ImageRepoName=self.param_ecr_repo_name.ref()
+                            '[{"name":"ECR_REPOSITORY_URI","value":"${ImageRepoName}","type":"PLAINTEXT"},{"name":"STAGING_URL","value":"${StagingUrl}","type":"PLAINTEXT"}]',
+                            ImageRepoName=self.param_ecr_repo_name.ref(),
+                            StagingUri=self.param_beanstalk_staging_url
                         )
                     },
                     OutputArtifacts=[

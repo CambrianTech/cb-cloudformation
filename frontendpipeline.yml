@@ -109,10 +109,10 @@ Resources:
             Version: '2012-10-17'
           PolicyName: !Sub
             - codebuild-Frontend-Build-${Id}-service-role
-            - Id: 35193784
+            - Id: 38390657
       RoleName: !Sub
         - codebuild-Frontend-Build-${Id}-service-role
-        - Id: 35193784
+        - Id: 38390657
     Type: AWS::IAM::Role
   Frontend:
     Properties:
@@ -121,7 +121,7 @@ Resources:
         Type: S3
       Name: !Sub
         - Frontend-${Id}
-        - Id: 35193784
+        - Id: 38390657
       RoleArn: !GetAtt 'PipelineRole.Arn'
       Stages:
         - Actions:
@@ -166,12 +166,18 @@ Resources:
                 Version: '1'
               Configuration:
                 EnvironmentVariables: !Sub
-                  - '[{"name":"ECR_REPOSITORY_URI","value":"${ImageRepoName}","type":"PLAINTEXT"}]'
+                  - '[{"name":"ECR_REPOSITORY_URI","value":"${ImageRepoName}","type":"PLAINTEXT"},{"name":"STAGING_URL","value":"${StagingUrl}","type":"PLAINTEXT"}]'
                   - ImageRepoName: !Ref 'ECRRepoName'
+                    StagingUri:
+                      Default: https://dev-staging.cambrianar.com
+                      Description: Url that is shown in the notification for the deployment
+                        approval process. Should be the url that points to the staging
+                        website.
+                      Type: String
                 PrimarySource: SourceArtifact
                 ProjectName: !Sub
                   - Frontend-Build-${Id}
-                  - Id: 35193784
+                  - Id: 38390657
               InputArtifacts:
                 - Name: SourceArtifact
                 - Name: EnvFiles
@@ -252,7 +258,7 @@ Resources:
           Status: DISABLED
       Name: !Sub
         - Frontend-Build-${Id}
-        - Id: 35193784
+        - Id: 38390657
       SecondarySourceVersions: []
       ServiceRole: !GetAtt 'CodebuildRole.Arn'
       Source:
@@ -377,8 +383,8 @@ Resources:
             Version: '2012-10-17'
           PolicyName: !Sub
             - AWSCodePipelineServiceRole-${AWS::Region}-Frontend-${Id}
-            - Id: 35193784
+            - Id: 38390657
       RoleName: !Sub
         - AWSCodePipelineServiceRole-${AWS::Region}-Frontend-${Id}
-        - Id: 35193784
+        - Id: 38390657
     Type: AWS::IAM::Role
