@@ -480,7 +480,7 @@ class FrontendTemplateFactory:
                         "EnvironmentVariables": ts.Sub(
                             '[{"name":"ECR_REPOSITORY_URI","value":"${ImageRepoName}","type":"PLAINTEXT"},{"name":"STAGING_URL","value":"${StagingUrl}","type":"PLAINTEXT"}]',
                             ImageRepoName=self.param_ecr_repo_name.ref(),
-                            StagingUri=self.param_beanstalk_staging_url
+                            StagingUri=self.param_beanstalk_staging_url.ref()
                         )
                     },
                     OutputArtifacts=[
