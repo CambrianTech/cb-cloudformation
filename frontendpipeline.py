@@ -379,12 +379,11 @@ class FrontendTemplateFactory:
                     ),
                     RunOrder=1,
                     Configuration={
-                        # TODO: Make these params
                         "Owner": self.param_github_owner.ref(),
                         "Repo": self.param_github_repo.ref(),
                         "Branch": self.param_github_branch.ref(),
                         "OAuthToken": self.param_github_oauth.ref(),
-                        "PollForSourceChanges": "false"
+                        "PollForSourceChanges": "true"
                     },
                     OutputArtifacts=[
                         ts.codepipeline.OutputArtifacts(
@@ -449,7 +448,8 @@ class FrontendTemplateFactory:
                 ),
                 ServiceRole=self.codebuild_role.get_att("Arn"),
                 TimeoutInMinutes=60,
-                EncryptionKey=ts.Sub("arn:aws:kms:${AWS::Region}:${AWS::AccountId}:alias/aws/s3"),
+                EncryptionKey=ts.Sub(
+                    "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:alias/aws/s3"),
                 BadgeEnabled=False,
                 LogsConfig=ts.codebuild.LogsConfig(
                     CloudWatchLogs=ts.codebuild.CloudWatchLogs(
