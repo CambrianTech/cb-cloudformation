@@ -345,7 +345,8 @@ class FrontendTemplateFactory:
                         {
                             "Effect": "Allow",
                             "Action": "ecr:*",
-                            "Resource": ts.Sub("arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${RepoName}", RepoName=self.param_ecr_repo_name.ref())
+                            "Resource": ts.Sub("arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${RepoName}",
+                                               RepoName=ts.Select(1, ts.Split("/", self.param_ecr_repo_name.ref())))
                         },
                     ]
                 }
