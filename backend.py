@@ -25,7 +25,9 @@ class BackendTemplateFactory:
     scale_up_threshold = 10
     scale_down_threshold = 3
 
-    def create_template(self) -> ts.Template:
+    def create_template(self, use_gpu) -> ts.Template:
+        self.use_gpu = use_gpu
+
         self.template = ts.Template("Cambrian image processing backend")
 
         self.ref_stack_id = ts.Ref("AWS::StackId")
@@ -380,7 +382,7 @@ class BackendTemplateFactory:
             ),
             ImageId=ts.FindInMap("ImageProcessingInstanceId", ts.Ref(
                 ts.AWS_REGION), "AMI"),  # TODO: Map name automatic
-            InstanceType="g4dn.2xlarge",
+            InstanceType="g4dn.2xlarge" if self.use_gpu else "t3.medium",
             UserData=ts.Base64(
                 # https://github.com/DiUS/cloudformation-templates/blob/b0dbf24f62dfa7c6867908cda168598f318bd6e3/ECS/ecs-cluster.template#L341-L365
                 ts.Join("", [
@@ -635,7 +637,7 @@ class BackendTemplateFactory:
                 MemoryReservation=4096,
                 ResourceRequirements=[
                     ts.ecs.ResourceRequirement(Type="GPU", Value="1")
-                ],
+                ] if self.use_gpu else [],
                 Image=self.param_ecr_repository_name.ref(),
                 LogConfiguration=ts.ecs.LogConfiguration(
                     LogDriver="awslogs",
@@ -888,14 +890,19 @@ class BackendTemplateFactory:
 def main():
     template_factory = BackendTemplateFactory()
 
-    template = template_factory.create_template()
+    def _write_template(path, use_gpu):
+        print("-- Writing backend template with use_gpu =", use_gpu, "to", path)
+        template = template_factory.create_template(use_gpu=use_gpu)
 
-    template_yaml = template.to_yaml()
+        template_yaml = template.to_yaml()
 
-    print(template_yaml)
+        print(template_yaml)
 
-    with open("backend.yml", "w") as output_file:
-        output_file.write(template_yaml)
+        with open(path, "w") as output_file:
+            output_file.write(template_yaml)
+
+    _write_template("backend.yml", use_gpu=True)
+    _write_template("backend_cpu.yml", use_gpu=False)
 
 
 if __name__ == "__main__":
