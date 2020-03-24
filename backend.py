@@ -21,6 +21,9 @@ class BackendTemplateFactory:
     presigned_url_fn_name = "GetUserUploadPresignedUrl"
 
     image_processing_container_name = "ImageProcessingContainer"
+    planes_container_name = "PlanesContainer"
+
+    planes_port = 8081
 
     scale_up_threshold = 10
     scale_down_threshold = 3
@@ -54,8 +57,15 @@ class BackendTemplateFactory:
         self.param_ecr_repository_name = self.template.add_parameter(ts.Parameter(
             "ImageProcessingServiceRepository",
             Type="String",
-            Default="752415772042.dkr.ecr.us-east-1.amazonaws.com/cb-imageprocessingservice-gpu:latest",
+            Default="312943975091.dkr.ecr.us-east-1.amazonaws.com/cb-imageprocessingservice:latest",
             Description="ECR Repository for the docker image to use."
+        ))
+
+        self.param_ecr_planes_repository_name = self.template.add_parameter(ts.Parameter(
+            "PlanesServiceRepository",
+            Type="String",
+            Default="312943975091.dkr.ecr.us-east-1.amazonaws.com/cb-planes:latest",
+            Description="ECR Repository for the planes docker image to use."
         ))
 
         self.param_image_processing_files_bucket_name = self.template.add_parameter(ts.Parameter(
@@ -627,31 +637,55 @@ class BackendTemplateFactory:
 
         self.image_processing_task_def = self._res(ts.ecs.TaskDefinition(
             "ImageProcessingTaskDefinition",
-            ContainerDefinitions=[ts.ecs.ContainerDefinition(
-                Name=self.image_processing_container_name,
-                Essential=True,
-                PortMappings=[ts.ecs.PortMapping(
-                    HostPort=8080,
-                    ContainerPort=8080
-                )],
-                MemoryReservation=4096,
-                ResourceRequirements=[
-                    ts.ecs.ResourceRequirement(Type="GPU", Value="1")
-                ] if self.use_gpu else [],
-                Image=self.param_ecr_repository_name.ref(),
-                LogConfiguration=ts.ecs.LogConfiguration(
-                    LogDriver="awslogs",
-                    Options={
-                        "awslogs-group": self.image_processing_log_group.ref(),
-                        "awslogs-region": ts.Ref(ts.AWS_REGION),
-                        "awslogs-stream-prefix": "image-processing-service"
-                    }
+            ContainerDefinitions=[
+                ts.ecs.ContainerDefinition(
+                    Name=self.image_processing_container_name,
+                    Essential=True,
+                    PortMappings=[ts.ecs.PortMapping(
+                        HostPort=8080,
+                        ContainerPort=8080
+                    )],
+                    MemoryReservation=4096,
+                    ResourceRequirements=[
+                        ts.ecs.ResourceRequirement(Type="GPU", Value="0.3")
+                    ] if self.use_gpu else [],
+                    Image=self.param_ecr_repository_name.ref(),
+                    LogConfiguration=ts.ecs.LogConfiguration(
+                        LogDriver="awslogs",
+                        Options={
+                            "awslogs-group": self.image_processing_log_group.ref(),
+                            "awslogs-region": ts.Ref(ts.AWS_REGION),
+                            "awslogs-stream-prefix": "image-processing-service"
+                        }
+                    ),
+                    Environment=[
+                        ts.ecs.Environment(Name="USER_UPLOADS_BUCKET", Value=self.param_user_uploads_bucket_name.ref()),
+                        ts.ecs.Environment(Name="RESULTS_BUCKET", Value=self.param_image_processing_results_bucket_name.ref()),
+                        ts.ecs.Environment(Name="PLANES_ADDRESS", Value="http://%s:%d" % (self.planes_container_name, self.planes_port)),
+                    ]
                 ),
-                Environment=[
-                    ts.ecs.Environment(Name="USER_UPLOADS_BUCKET", Value=self.param_user_uploads_bucket_name.ref()),
-                    ts.ecs.Environment(Name="RESULTS_BUCKET", Value=self.param_image_processing_results_bucket_name.ref()),
-                ]
-            )]
+                ts.ecs.ContainerDefinition(
+                    Name=self.planes_container_name,
+                    Essential=True,
+                    PortMappings=[ts.ecs.PortMapping(
+                        HostPort=self.planes_port,
+                        ContainerPort=self.planes_port
+                    )],
+                    MemoryReservation=4096,
+                    ResourceRequirements=[
+                        ts.ecs.ResourceRequirement(Type="GPU", Value="0.7")
+                    ] if self.use_gpu else [],
+                    Image=self.param_ecr_planes_repository_name.ref(),
+                    LogConfiguration=ts.ecs.LogConfiguration(
+                        LogDriver="awslogs",
+                        Options={
+                            "awslogs-group": self.image_processing_log_group.ref(),
+                            "awslogs-region": ts.Ref(ts.AWS_REGION),
+                            "awslogs-stream-prefix": "planes-service"
+                        }
+                    )
+                ),
+            ]
         ))
 
         # Create ECS service on cluster
