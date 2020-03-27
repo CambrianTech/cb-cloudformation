@@ -28,8 +28,9 @@ class BackendTemplateFactory:
     scale_up_threshold = 10
     scale_down_threshold = 3
 
-    def create_template(self, use_gpu) -> ts.Template:
+    def create_template(self, use_gpu, cluster_key_name=None) -> ts.Template:
         self.use_gpu = use_gpu
+        self.cluster_key_name = cluster_key_name
 
         self.template = ts.Template("Cambrian image processing backend")
 
@@ -78,14 +79,14 @@ class BackendTemplateFactory:
         self.param_user_uploads_bucket_name = self.template.add_parameter(ts.Parameter(
             "ImageProcessingUserUploadsBucket",
             Type="String",
-            Default="cb-user-image-uploads",
+            Default="cb-backend-data",
             Description="S3 bucket where user uploaded content will be stored."
         ))
 
         self.param_image_processing_results_bucket_name = self.template.add_parameter(ts.Parameter(
             "ImageProcessingResultsBucket",
             Type="String",
-            Default="cb-user-image-uploads",
+            Default="cb-backend-data",
             Description="S3 bucket where processed images will be stored."
         ))
 
@@ -307,29 +308,48 @@ class BackendTemplateFactory:
         self.image_processing_instance_id_mapping = self._map("ImageProcessingInstanceId", {
             # ECS GPU optimized AMI IDs. Add more regions here if necessary.
             # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-optimized_AMI.html
-            "us-east-1": {"AMI": "ami-0ca3f30db6994a2ff"},
+            # Currently using a custom image based on the ECS-optimized GPU image to ensure all
+            # containers run with the nvidia runtime in order to share GPUs between them.
+            # See https://github.com/aws/containers-roadmap/issues/327#issuecomment-471162879
+            "us-east-1": {"AMI": "ami-0688dafbb42dbc11b"}, # ami-0ca3f30db6994a2ff
             "us-east-2": {"AMI": "ami-0c45dd0e1ef99bcf2"},
             "us-west-1": {"AMI": "ami-0ddd4f56f0468c9c4"},
             "us-west-2": {"AMI": "ami-0a36be2e955646bb2"},
         })
 
+        sg_rules = [
+            ts.ec2.SecurityGroupRule(
+                "ImageProcessingLoadBalancerSGIngress",
+                CidrIp="0.0.0.0/0",
+                IpProtocol="tcp",
+                FromPort=8080,
+                ToPort=8080
+            )
+        ]
+
+        launch_config_args = {}
+        if self.cluster_key_name is not None:
+            print("Warning: allowing ssh connection to cluster")
+            sg_rules.append(ts.ec2.SecurityGroupRule(
+                "ImageProcessingLoadBalancerSGIngress",
+                CidrIp="0.0.0.0/0",
+                IpProtocol="tcp",
+                FromPort=22,
+                ToPort=22
+            ))
+            launch_config_args["KeyName"] = self.cluster_key_name
+
         self.image_processing_instance_sg = self._res(ts.ec2.SecurityGroup(
             "ImageProcessingInstanceSG",
             GroupDescription="Allow TCP traffic on 8080",
             VpcId=self.vpc.ref(),
-            SecurityGroupIngress=[
-                ts.ec2.SecurityGroupRule(
-                    "ImageProcessingLoadBalancerSGIngress",
-                    CidrIp="0.0.0.0/0",
-                    IpProtocol="tcp",
-                    FromPort=8080,
-                    ToPort=8080
-                ),
-            ]
+            SecurityGroupIngress=sg_rules
         ))
+
 
         self.image_processing_launch_config = self._res(ts.autoscaling.LaunchConfiguration(
             "ImageProcessingLaunchConfiguration",
+            **launch_config_args,
             Metadata=ts.autoscaling.Metadata(
                 ts.cloudformation.Init({
                     "config": ts.cloudformation.InitConfig(
@@ -647,7 +667,10 @@ class BackendTemplateFactory:
                     )],
                     MemoryReservation=4096,
                     ResourceRequirements=[
-                        ts.ecs.ResourceRequirement(Type="GPU", Value="0.3")
+                        # Can't currently share GPUs in ECS this way, so we're using
+                        # a custom AMI that uses the nvidia runtime for all containers
+                        # which will automatically share all GPUs.
+                        #ts.ecs.ResourceRequirement(Type="GPU", Value="1")
                     ] if self.use_gpu else [],
                     Image=self.param_ecr_repository_name.ref(),
                     LogConfiguration=ts.ecs.LogConfiguration(
@@ -662,7 +685,8 @@ class BackendTemplateFactory:
                         ts.ecs.Environment(Name="USER_UPLOADS_BUCKET", Value=self.param_user_uploads_bucket_name.ref()),
                         ts.ecs.Environment(Name="RESULTS_BUCKET", Value=self.param_image_processing_results_bucket_name.ref()),
                         ts.ecs.Environment(Name="PLANES_ADDRESS", Value="http://%s:%d" % (self.planes_container_name, self.planes_port)),
-                    ]
+                    ],
+                    Links=[self.planes_container_name]
                 ),
                 ts.ecs.ContainerDefinition(
                     Name=self.planes_container_name,
@@ -673,7 +697,7 @@ class BackendTemplateFactory:
                     )],
                     MemoryReservation=4096,
                     ResourceRequirements=[
-                        ts.ecs.ResourceRequirement(Type="GPU", Value="0.7")
+                        ts.ecs.ResourceRequirement(Type="GPU", Value="1")
                     ] if self.use_gpu else [],
                     Image=self.param_ecr_planes_repository_name.ref(),
                     LogConfiguration=ts.ecs.LogConfiguration(
@@ -684,7 +708,7 @@ class BackendTemplateFactory:
                             "awslogs-stream-prefix": "planes-service"
                         }
                     )
-                ),
+                )
             ]
         ))
 
@@ -929,8 +953,6 @@ def main():
         template = template_factory.create_template(use_gpu=use_gpu)
 
         template_yaml = template.to_yaml()
-
-        print(template_yaml)
 
         with open(path, "w") as output_file:
             output_file.write(template_yaml)
