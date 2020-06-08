@@ -72,7 +72,7 @@ class BackendTemplateFactory:
         self.param_image_processing_files_bucket_name = self.template.add_parameter(ts.Parameter(
             "ImageProcessingFilesBucket",
             Type="String",
-            Default="cb-imageprocessingservice",
+            Default="cb-imageprocessingservice-models",
             Description="S3 bucket with the files (models etc.) that the container will download on startup."
         ))
 
@@ -652,7 +652,8 @@ class BackendTemplateFactory:
                 "ImageProcessingLogGroup",
                 ts.Ref(ts.AWS_STACK_NAME)
             ]),
-            RetentionInDays=14
+            RetentionInDays=14,
+            DeletionPolicy="Retain"
         ))
 
         self.image_processing_task_def = self._res(ts.ecs.TaskDefinition(
@@ -682,6 +683,7 @@ class BackendTemplateFactory:
                         }
                     ),
                     Environment=[
+                        ts.ecs.Environment(Name="FILES_BUCKET", Value=self.param_image_processing_files_bucket_name.ref()),
                         ts.ecs.Environment(Name="USER_UPLOADS_BUCKET", Value=self.param_user_uploads_bucket_name.ref()),
                         ts.ecs.Environment(Name="RESULTS_BUCKET", Value=self.param_image_processing_results_bucket_name.ref()),
                         ts.ecs.Environment(Name="PLANES_ADDRESS", Value="http://%s:%d" % (self.planes_container_name, self.planes_port)),
