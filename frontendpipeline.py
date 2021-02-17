@@ -507,7 +507,7 @@ class FrontendTemplateFactory:
         # when a new build is available for deployment.
         sns_topic = self._res(ts.sns.Topic(
             "ApproveFrontendDeployment",
-            TopicName="ApproveFrontendDeployment"
+            TopicName="ApproveFrontendDeployment-%d" % self.random_id
         ))
 
         self.approve_stage = ts.codepipeline.Stages(
