@@ -311,7 +311,7 @@ class BackendTemplateFactory:
             # Currently using a custom image based on the ECS-optimized GPU image to ensure all
             # containers run with the nvidia runtime in order to share GPUs between them.
             # See https://github.com/aws/containers-roadmap/issues/327#issuecomment-471162879
-            "us-east-1": {"AMI": "ami-0688dafbb42dbc11b"}, # ami-0ca3f30db6994a2ff
+            "us-east-1": {"AMI": "ami-078703383d34ae5ba"}, # ami-0ca3f30db6994a2ff
             "us-east-2": {"AMI": "ami-0c45dd0e1ef99bcf2"},
             "us-west-1": {"AMI": "ami-0ddd4f56f0468c9c4"},
             "us-west-2": {"AMI": "ami-0a36be2e955646bb2"},
