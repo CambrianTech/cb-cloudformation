@@ -59,7 +59,7 @@ Parameters:
 Resources:
   ApproveFrontendDeployment:
     Properties:
-      TopicName: ApproveFrontendDeployment
+      TopicName: ApproveFrontendDeployment-61138944
     Type: AWS::SNS::Topic
   CodebuildRole:
     Properties:
@@ -105,14 +105,18 @@ Resources:
                 Effect: Allow
                 Resource: !Sub
                   - arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${RepoName}
-                  - RepoName: !Ref 'ECRRepoName'
+                  - RepoName: !Select
+                      - 1
+                      - !Split
+                        - /
+                        - !Ref 'ECRRepoName'
             Version: '2012-10-17'
           PolicyName: !Sub
             - codebuild-Frontend-Build-${Id}-service-role
-            - Id: 73842777
+            - Id: 61138944
       RoleName: !Sub
         - codebuild-Frontend-Build-${Id}-service-role
-        - Id: 73842777
+        - Id: 61138944
     Type: AWS::IAM::Role
   Frontend:
     Properties:
@@ -121,7 +125,7 @@ Resources:
         Type: S3
       Name: !Sub
         - Frontend-${Id}
-        - Id: 73842777
+        - Id: 61138944
       RoleArn: !GetAtt 'PipelineRole.Arn'
       Stages:
         - Actions:
@@ -134,7 +138,7 @@ Resources:
                 Branch: !Ref 'GitHubBranch'
                 OAuthToken: !Ref 'GitHubOAuthToken'
                 Owner: !Ref 'GitHubOwner'
-                PollForSourceChanges: 'false'
+                PollForSourceChanges: 'true'
                 Repo: !Ref 'GitHubRepo'
               InputArtifacts: []
               Name: Source
@@ -172,7 +176,7 @@ Resources:
                 PrimarySource: SourceArtifact
                 ProjectName: !Sub
                   - Frontend-Build-${Id}
-                  - Id: 73842777
+                  - Id: 61138944
               InputArtifacts:
                 - Name: SourceArtifact
                 - Name: EnvFiles
@@ -253,7 +257,7 @@ Resources:
           Status: DISABLED
       Name: !Sub
         - Frontend-Build-${Id}
-        - Id: 73842777
+        - Id: 61138944
       SecondarySourceVersions: []
       ServiceRole: !GetAtt 'CodebuildRole.Arn'
       Source:
@@ -378,8 +382,8 @@ Resources:
             Version: '2012-10-17'
           PolicyName: !Sub
             - AWSCodePipelineServiceRole-${AWS::Region}-Frontend-${Id}
-            - Id: 73842777
+            - Id: 61138944
       RoleName: !Sub
         - AWSCodePipelineServiceRole-${AWS::Region}-Frontend-${Id}
-        - Id: 73842777
+        - Id: 61138944
     Type: AWS::IAM::Role
