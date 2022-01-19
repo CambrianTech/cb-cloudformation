@@ -1,4 +1,5 @@
 import troposphere as ts
+from troposphere import GetAtt
 import troposphere.ec2
 import troposphere.awslambda
 import troposphere.iam
@@ -15,6 +16,7 @@ import troposphere.helpers.userdata
 import troposphere.logs
 import troposphere.cloudwatch
 import troposphere.applicationautoscaling
+import troposphere.sqs
 
 
 class BackendTemplateFactory:
@@ -40,6 +42,7 @@ class BackendTemplateFactory:
         self._create_parameters()
 
         self._create_vpc()
+        self._create_sqs()
         self._create_presigned_url_lambda()
         self._create_api_gateway()
         self._create_cluster()
@@ -58,7 +61,7 @@ class BackendTemplateFactory:
         self.param_ecr_repository_name = self.template.add_parameter(ts.Parameter(
             "ImageProcessingServiceRepository",
             Type="String",
-            Default="312943975091.dkr.ecr.us-east-1.amazonaws.com/cb-imageprocessingservice:latest",
+            Default="312943975091.dkr.ecr.us-east-1.amazonaws.com/cb-imageprocessingservice-api-3-dev-sqs:latest",
             Description="ECR Repository for the docker image to use."
         ))
 
@@ -90,6 +93,20 @@ class BackendTemplateFactory:
             Description="S3 bucket where processed images will be stored."
         ))
 
+        self.param_min_instances = self.template.add_parameter(ts.Parameter(
+            "MinimumInstances",
+            Type="Number",
+            Default=2,
+            Description="Minimum number of instances and tasks for the cluster."
+        ))
+
+        self.param_max_instances = self.template.add_parameter(ts.Parameter(
+            "MaximumInstances",
+            Type="Number",
+            Default=4,
+            Description="Maximum number of instances and tasks for the cluster."
+        ))
+
     def _create_vpc(self):
         # Create VPC
         self.vpc = self._res(
@@ -106,7 +123,7 @@ class BackendTemplateFactory:
         self.pub_sub2 = self._res(
             ts.ec2.Subnet("PublicSubnet2", CidrBlock="10.0.1.0/24",
                           VpcId=self.vpc.ref(), Tags=self.tags_stack_id,
-                          AvailabilityZone=ts.Sub("${AWS::Region}b"))
+                          AvailabilityZone=ts.Sub("${AWS::Region}f"))
         )
 
         # Create and attach internet gateway to public subnet
@@ -227,7 +244,7 @@ class BackendTemplateFactory:
                         }
                     ),
                     Role=self.presigned_url_lambda_execution_role.get_att("Arn"),
-                    Runtime="nodejs10.x",
+                    Runtime="nodejs14.x",
                     MemorySize=128,  # TODO: Make this param
                     Timeout=3  # TODO: Make this param
                 )
@@ -298,6 +315,105 @@ class BackendTemplateFactory:
 
         self.rest_api_get_presigned_permissions, self.api_get_presigned, self.api_get_presigned_method = _add_lambda(self.presigned_url_lambda, "UserUpload", self.presigned_url_fn_name)
 
+        # Wire up load balancer with api gateway (url/ImageProcessing/*)
+        self.api_image_processing = self._res(
+            ts.apigateway.Resource(
+                "ImageProcessingRestApiResource",
+                ParentId=self.rest_api.get_att("RootResourceId"),
+                RestApiId=self.rest_api.ref(),
+                PathPart="ImageProcessing"
+            )
+        )
+
+        self.api_image_processing_process_resource = self._res(
+            ts.apigateway.Resource(
+                "ImageProcessingProcessResource",
+                ParentId=self.api_image_processing.ref(),
+                RestApiId=self.rest_api.ref(),
+                PathPart="process"
+            )
+        )
+
+        self.api_image_processing_process_role = self._res(
+            ts.iam.Role(
+                "ImageProcessingProcessRole",
+                DependsOn=[self.image_processing_queue.title],
+                Path="/",
+                Policies=[
+                    ts.iam.Policy(
+                        PolicyName="SqsSendMessage",
+                        PolicyDocument={
+                            "Version": "2012-10-17",
+                            "Statement": [{
+                                "Action": [
+                                    "sqs:SendMessage",
+                                ],
+                                "Effect": "Allow",
+                                "Resource": [
+                                    GetAtt(self.image_processing_queue, "Arn"),
+                                ]
+                            }]
+                        }
+                    ),
+                ],
+                AssumeRolePolicyDocument={
+                    "Version": "2012-10-17",
+                    "Statement": [{
+                        "Action": ["sts:AssumeRole"],
+                        "Effect": "Allow",
+                        "Principal": {
+                            "Service": ["apigateway.amazonaws.com"]
+                        }
+                    }]
+                },
+            )
+        )
+
+        self.api_image_processing_method = self._res(
+            ts.apigateway.Method(
+                "ImageProcessingMethod",
+                DependsOn=[
+                    self.api_image_processing_process_role.title,
+                    self.image_processing_queue.title,
+                    self.api_image_processing_process_resource.title,
+                ],
+                HttpMethod="POST",
+                ResourceId=self.api_image_processing_process_resource.ref(),
+                RestApiId=self.rest_api.ref(),
+                AuthorizationType="NONE",
+                Integration=ts.apigateway.Integration(
+                    Type="AWS",
+                    Credentials=GetAtt(self.api_image_processing_process_role, "Arn"),
+                    IntegrationHttpMethod="POST",
+                    IntegrationResponses=[
+                        ts.apigateway.IntegrationResponse(
+                            "ImageProcessingIntegrationResponse",
+                            StatusCode="200"
+                        )
+                    ],
+                    Uri=ts.Sub("arn:aws:apigateway:${AWS::Region}:sqs:action/SendMessage"),
+                    RequestParameters={
+                        "integration.request.querystring.MessageBody": "method.request.body",
+                        "integration.request.querystring.QueueUrl": ts.Join("", ["'", self.image_processing_queue.ref(), "'"]),
+                        "integration.request.querystring.MessageGroupId": "'default'",
+                    }
+                ),
+                MethodResponses=[
+                    ts.apigateway.MethodResponse(
+                        "ImageProcessingResponse",
+                        StatusCode="200"
+                    )
+                ]
+            ),
+        )
+
+    def _create_sqs(self):
+        self.image_processing_queue = self._res(troposphere.sqs.Queue(
+            "ImageProcessingQueue",
+            FifoQueue=True,
+            VisibilityTimeout=300
+        ))
+
     def _create_cluster(self):
         # Create cluster
         self.image_processing_cluster = self._res(ts.ecs.Cluster(
@@ -311,7 +427,7 @@ class BackendTemplateFactory:
             # Currently using a custom image based on the ECS-optimized GPU image to ensure all
             # containers run with the nvidia runtime in order to share GPUs between them.
             # See https://github.com/aws/containers-roadmap/issues/327#issuecomment-471162879
-            "us-east-1": {"AMI": "ami-0688dafbb42dbc11b"}, # ami-0ca3f30db6994a2ff
+            "us-east-1": {"AMI": "ami-078703383d34ae5ba"},
             "us-east-2": {"AMI": "ami-0c45dd0e1ef99bcf2"},
             "us-west-1": {"AMI": "ami-0ddd4f56f0468c9c4"},
             "us-west-2": {"AMI": "ami-0a36be2e955646bb2"},
@@ -362,7 +478,14 @@ class BackendTemplateFactory:
                                     " >> /etc/ecs/ecs.config\n",
                                     "echo ECS_ENABLE_CONTAINER_METADATA=1",
                                     " >> /etc/ecs/ecs.config\n",
-                                    "echo 'OPTIONS=\"${OPTIONS} --storage-opt dm.basesize=20G\"' >> /etc/sysconfig/docker\n"
+                                    "echo ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION=10m",
+                                    " >> /etc/ecs/ecs.config\n",
+                                    "echo ECS_IMAGE_CLEANUP_INTERVAL=10m",
+                                    " >> /etc/ecs/ecs.config\n",
+                                    "echo ECS_IMAGE_MINIMUM_CLEANUP_AGE=10m",
+                                    " >> /etc/ecs/ecs.config\n",
+                                    "echo 'OPTIONS=\"${OPTIONS} --storage-opt dm.basesize=20G\"'",
+                                    " >> /etc/sysconfig/docker\n"
                                 ])
                             }
                         },
@@ -450,9 +573,9 @@ class BackendTemplateFactory:
             "ImageProcessingAutoScalingGroup",
             VPCZoneIdentifier=[self.pub_sub.ref(), self.pub_sub2.ref()],
             LaunchConfigurationName=self.image_processing_launch_config.ref(),
-            MinSize=1,
-            MaxSize=2,  # TODO: Parameter for this?
-            DesiredCapacity=1,  # TODO: Parameter for this?
+            MinSize=self.param_min_instances.ref(),
+            MaxSize=self.param_max_instances.ref(),
+            DesiredCapacity=self.param_min_instances.ref(),
 
             # Wait 5 minutes before timing out when not receiving health signal
             CreationPolicy=ts.policies.CreationPolicy(
@@ -462,7 +585,7 @@ class BackendTemplateFactory:
             ),
             UpdatePolicy=ts.policies.UpdatePolicy(
                 AutoScalingRollingUpdate=ts.policies.AutoScalingRollingUpdate(
-                    MinInstancesInService=1,
+                    MinInstancesInService=self.param_min_instances.ref(),
                     MaxBatchSize=1,
                     PauseTime="PT5M",
                     WaitOnResourceSignals=True
@@ -507,6 +630,7 @@ class BackendTemplateFactory:
 
         self.image_processing_instance_role = self._res(ts.iam.Role(
             "ImageProcessingInstanceRole",
+            DependsOn=[self.image_processing_queue.title],
             Path="/",
             AssumeRolePolicyDocument={
                 "Version": "2012-10-17",
@@ -543,6 +667,24 @@ class BackendTemplateFactory:
                             ],
                             "Effect": "Allow",
                             "Resource": "*"
+                        }]
+                    }
+                ),
+                ts.iam.Policy(
+                    PolicyName="ImageProcessingInstancePolicySQS",
+                    PolicyDocument={
+                        "Version": "2012-10-17",
+                        "Statement": [{
+                            "Action": [
+                                "sqs:GetQueueAttributes",
+                                "sqs:GetQueueUrl",
+                                "sqs:ReceiveMessage",
+                                "sqs:DeleteMessage",
+                            ],
+                            "Effect": "Allow",
+                            "Resource": [
+                                GetAtt(self.image_processing_queue, "Arn"),
+                            ]
                         }]
                     }
                 ),
@@ -628,7 +770,10 @@ class BackendTemplateFactory:
 
         self.image_processing_load_balancer = self._res(ts.elasticloadbalancing.LoadBalancer(
             "ImageProcessingLoadBalancer",
-            DependsOn=[self.image_processing_load_balancer_sg.title],
+            DependsOn=[
+                self.image_processing_load_balancer_sg.title,
+                self.internet_gateway.title,
+            ],
             Subnets=[self.pub_sub.ref(), self.pub_sub2.ref()],
             Listeners=[ts.elasticloadbalancing.Listener(
                 LoadBalancerPort=8080,
@@ -648,16 +793,13 @@ class BackendTemplateFactory:
 
         self.image_processing_log_group = self._res(ts.logs.LogGroup(
             "ImageProcessingLogGroup",
-            LogGroupName=ts.Join("-", [
-                "ImageProcessingLogGroup",
-                ts.Ref(ts.AWS_STACK_NAME)
-            ]),
             RetentionInDays=14,
             DeletionPolicy="Retain"
         ))
 
         self.image_processing_task_def = self._res(ts.ecs.TaskDefinition(
             "ImageProcessingTaskDefinition",
+            DependsOn=[self.image_processing_queue.title],
             ContainerDefinitions=[
                 ts.ecs.ContainerDefinition(
                     Name=self.image_processing_container_name,
@@ -666,7 +808,7 @@ class BackendTemplateFactory:
                         HostPort=8080,
                         ContainerPort=8080
                     )],
-                    MemoryReservation=4096,
+                    MemoryReservation=10000,
                     ResourceRequirements=[
                         # Can't currently share GPUs in ECS this way, so we're using
                         # a custom AMI that uses the nvidia runtime for all containers
@@ -687,6 +829,7 @@ class BackendTemplateFactory:
                         ts.ecs.Environment(Name="USER_UPLOADS_BUCKET", Value=self.param_user_uploads_bucket_name.ref()),
                         ts.ecs.Environment(Name="RESULTS_BUCKET", Value=self.param_image_processing_results_bucket_name.ref()),
                         ts.ecs.Environment(Name="PLANES_ADDRESS", Value="http://%s:%d" % (self.planes_container_name, self.planes_port)),
+                        ts.ecs.Environment(Name="SQS_QUEUE_NAME", Value=GetAtt(self.image_processing_queue, "QueueName")),
                     ],
                     Links=[self.planes_container_name]
                 ),
@@ -697,7 +840,7 @@ class BackendTemplateFactory:
                         HostPort=self.planes_port,
                         ContainerPort=self.planes_port
                     )],
-                    MemoryReservation=4096,
+                    MemoryReservation=10000,
                     ResourceRequirements=[
                         ts.ecs.ResourceRequirement(Type="GPU", Value="1")
                     ] if self.use_gpu else [],
@@ -719,7 +862,7 @@ class BackendTemplateFactory:
             "ImageProcessingService",
             DependsOn=self.image_processing_auto_scaling_group.title,
             Cluster=self.image_processing_cluster.ref(),
-            DesiredCount=1,
+            DesiredCount=self.param_min_instances.ref(),
             DeploymentConfiguration=ts.ecs.DeploymentConfiguration(
                 MaximumPercent=100,
                 MinimumHealthyPercent=0  # 0% Needed for dev updates
@@ -732,55 +875,6 @@ class BackendTemplateFactory:
             Role=self.image_processing_service_role.ref(),
             TaskDefinition=self.image_processing_task_def.ref()
         ))
-
-        # Wire up load balancer with api gateway (url/ImageProcessing/*)
-        self.api_image_processing = self._res(
-            ts.apigateway.Resource(
-                "ImageProcessingRestApiResource",
-                ParentId=self.rest_api.get_att("RootResourceId"),
-                RestApiId=self.rest_api.ref(),
-                PathPart="ImageProcessing"
-            )
-        )
-
-        self.api_image_processing_proxy = self._res(
-            ts.apigateway.Resource(
-                "ImageProcessingProxyRestApiResource",
-                ParentId=self.api_image_processing.ref(),
-                RestApiId=self.rest_api.ref(),
-                PathPart="{proxy+}"
-            )
-        )
-
-        self.api_image_processing_method = self._res(
-            ts.apigateway.Method(
-                "ImageProcessingMethod",
-                DependsOn=self.image_processing_service.title,
-                HttpMethod="ANY",
-                ResourceId=self.api_image_processing_proxy.ref(),
-                RestApiId=self.rest_api.ref(),
-                AuthorizationType="NONE",
-                RequestParameters={
-                    "method.request.path.proxy": "true",
-                },
-                Integration=ts.apigateway.Integration(
-                    Type="HTTP_PROXY",
-                    IntegrationHttpMethod="ANY",
-                    PassthroughBehavior="WHEN_NO_MATCH",
-                    RequestParameters={
-                        "integration.request.path.proxy": "method.request.path.proxy",
-                    },
-                    Uri=ts.Join("", [
-                                "http://", self.image_processing_load_balancer.get_att("DNSName"), ":8080", "/{proxy}"])
-                ),
-                MethodResponses=[
-                    ts.apigateway.MethodResponse(
-                        "ImageProcessingResponse",
-                        StatusCode="200"
-                    )
-                ]
-            )
-        )
 
     def _create_api_stage(self):
         self.api_deployment = self._res(
@@ -839,8 +933,8 @@ class BackendTemplateFactory:
 
         self.image_processing_container_scaling_target = self._res(ts.applicationautoscaling.ScalableTarget(
             "ImageProcessingContainerScalingTarget",
-            MinCapacity=1,
-            MaxCapacity=2,
+            MinCapacity=self.param_min_instances.ref(),
+            MaxCapacity=self.param_max_instances.ref(),
             ScalableDimension="ecs:service:DesiredCount",
             ServiceNamespace="ecs",
             ResourceId=ts.Join("/", [
@@ -861,7 +955,7 @@ class BackendTemplateFactory:
             ServiceNamespace="ecs",
             StepScalingPolicyConfiguration=ts.applicationautoscaling.StepScalingPolicyConfiguration(
                 AdjustmentType="ChangeInCapacity",
-                Cooldown=60,
+                Cooldown=300,
                 MetricAggregationType="Average",
                 StepAdjustments=[
                     ts.applicationautoscaling.StepAdjustment(
@@ -881,7 +975,7 @@ class BackendTemplateFactory:
             ServiceNamespace="ecs",
             StepScalingPolicyConfiguration=ts.applicationautoscaling.StepScalingPolicyConfiguration(
                 AdjustmentType="ChangeInCapacity",
-                Cooldown=60,
+                Cooldown=300,
                 MetricAggregationType="Average",
                 StepAdjustments=[
                     ts.applicationautoscaling.StepAdjustment(
@@ -897,7 +991,7 @@ class BackendTemplateFactory:
             "ImageProcessingScaleUpPolicy",
             AutoScalingGroupName=self.image_processing_auto_scaling_group.ref(),
             AdjustmentType="ChangeInCapacity",
-            Cooldown=60,
+            Cooldown=300,
             ScalingAdjustment=1
         ))
 
@@ -905,7 +999,7 @@ class BackendTemplateFactory:
             "ImageProcessingScaleDownPolicy",
             AutoScalingGroupName=self.image_processing_auto_scaling_group.ref(),
             AdjustmentType="ChangeInCapacity",
-            Cooldown=60,
+            Cooldown=300,
             ScalingAdjustment=-1
         ))
 
