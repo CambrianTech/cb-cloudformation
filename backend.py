@@ -411,7 +411,8 @@ class BackendTemplateFactory:
         self.image_processing_queue = self._res(troposphere.sqs.Queue(
             "ImageProcessingQueue",
             FifoQueue=True,
-            VisibilityTimeout=300
+            VisibilityTimeout=300,
+            ContentBasedDeduplication=True,
         ))
 
     def _create_cluster(self):
