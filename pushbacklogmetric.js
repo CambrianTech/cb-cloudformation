@@ -50,14 +50,32 @@ exports.handler = async event => {
 
     const metricResponse = await cloudwatch.putMetricData({
         Namespace: "ImageProcessingService",
-        MetricData: [{
-            MetricName: "BacklogPerInstance",
-            Value: backlogPerInstance,
-            Dimensions: [{
-                Name: "ClusterName",
-                Value: process.env.CLUSTER_NAME
-            }],
-        }],
+        MetricData: [
+            {
+                MetricName: "BacklogPerInstance",
+                Value: backlogPerInstance,
+                Dimensions: [{
+                    Name: "ClusterName",
+                    Value: process.env.CLUSTER_NAME
+                }],
+            },
+            {
+                MetricName: "Backlog",
+                Value: backlog,
+                Dimensions: [{
+                    Name: "ClusterName",
+                    Value: process.env.CLUSTER_NAME
+                }],
+            },
+            {
+                MetricName: "DesiredCapacity",
+                Value: desiredCapacity,
+                Dimensions: [{
+                    Name: "ClusterName",
+                    Value: process.env.CLUSTER_NAME
+                }],
+            },
+        ],
     }).promise()
 
     console.log("Put metric data", metricResponse)
