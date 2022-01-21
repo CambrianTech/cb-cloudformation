@@ -17,18 +17,17 @@ import troposphere.logs
 import troposphere.cloudwatch
 import troposphere.applicationautoscaling
 import troposphere.sqs
+import troposphere.events
 
 
 class BackendTemplateFactory:
     presigned_url_fn_name = "GetUserUploadPresignedUrl"
+    backlog_fn_name = "PushBacklogMetric"
 
     image_processing_container_name = "ImageProcessingContainer"
     planes_container_name = "PlanesContainer"
 
     planes_port = 8081
-
-    scale_up_threshold = 10
-    scale_down_threshold = 3
 
     def create_template(self, use_gpu, cluster_key_name=None) -> ts.Template:
         self.use_gpu = use_gpu
@@ -46,6 +45,7 @@ class BackendTemplateFactory:
         self._create_presigned_url_lambda()
         self._create_api_gateway()
         self._create_cluster()
+        self._create_backlog_lambda()
         self._create_api_stage()
         self._create_scaling()
 
@@ -253,6 +253,140 @@ class BackendTemplateFactory:
         # User upload
         self.presigned_url_lambda = _create_lambda("getuploadpresignedurl.js", self.presigned_url_fn_name, self.param_user_uploads_bucket_name)
 
+    def _create_backlog_lambda(self):
+        # - SQS GetQueueAttributes
+        # - Autoscaling DescribeAutoScalingGroups
+        # - CW PutMetricData
+        self.backlog_lambda_execution_role = self._res(
+            ts.iam.Role(
+                "BacklogExecutionRole",
+                DependsOn=[self.image_processing_queue.title],
+                Path="/",
+                Policies=[
+                    ts.iam.Policy(
+                        PolicyName="root",
+                        PolicyDocument={
+                            "Version": "2012-10-17",
+                            "Statement": [{
+                                "Action": ["logs:*"],
+                                "Resource": "arn:aws:logs:*:*:*",
+                                "Effect": "Allow"
+                            }]
+                        }
+                    ),
+                    ts.iam.Policy(
+                        PolicyName="SqsGetQueueAttributes",
+                        PolicyDocument={
+                            "Version": "2012-10-17",
+                            "Statement": [{
+                                "Action": [
+                                    "sqs:GetQueueAttributes",
+                                ],
+                                "Effect": "Allow",
+                                "Resource": [
+                                    GetAtt(self.image_processing_queue, "Arn"),
+                                ]
+                            }]
+                        }
+                    ),
+                    ts.iam.Policy(
+                        PolicyName="AutoscalingDescribeAutoScalingGroups",
+                        PolicyDocument={
+                            "Version": "2012-10-17",
+                            "Statement": [{
+                                "Action": [
+                                    "autoscaling:DescribeAutoScalingGroups",
+                                ],
+                                "Effect": "Allow",
+                                "Resource": "*" # TODO: Figure out way to get ASG ARN
+                            }]
+                        }
+                    ),
+                    ts.iam.Policy(
+                        PolicyName="CWPutMetricData",
+                        PolicyDocument={
+                            "Version": "2012-10-17",
+                            "Statement": [{
+                                "Action": [
+                                    "cloudwatch:PutMetricData",
+                                ],
+                                "Effect": "Allow",
+                                "Resource": "*"
+                            }]
+                        }
+                    ),
+                ],
+                AssumeRolePolicyDocument={
+                    "Version": "2012-10-17",
+                    "Statement": [{
+                        "Action": ["sts:AssumeRole"],
+                        "Effect": "Allow",
+                        "Principal": {
+                            "Service": ["lambda.amazonaws.com"]
+                        }
+                    }]
+                },
+            )
+        )
+
+        with open("pushbacklogmetric.js", "r") as code_file:
+            code_lines = code_file.readlines()
+
+        self.backlog_lambda = self._res(
+            ts.awslambda.Function(
+                self.backlog_fn_name,
+                DependsOn=[
+                    self.image_processing_queue.title,
+                    self.image_processing_auto_scaling_group.title,
+                    self.image_processing_cluster.title,
+                    self.backlog_lambda_execution_role.title,
+                ],
+                Code=ts.awslambda.Code(ZipFile=ts.Join("", code_lines)),
+                Handler="index.handler",
+                Environment=ts.awslambda.Environment(
+                    Variables={
+                        "QUEUE_URL": self.image_processing_queue.ref(),
+                        "AUTOSCALINGGROUP_NAME": self.image_processing_auto_scaling_group.ref(),
+                        "CLUSTER_NAME": self.image_processing_cluster.ref(),
+                    }
+                ),
+                Role=self.backlog_lambda_execution_role.get_att("Arn"),
+                Runtime="nodejs14.x",
+                MemorySize=128,  # TODO: Make this param
+                Timeout=3  # TODO: Make this param
+            )
+        )
+
+        self.backlog_lambda_schedule = self._res(
+            ts.events.Rule(
+                "%sSchedule" % self.backlog_fn_name,
+                DependsOn=[
+                    self.backlog_lambda.title,
+                ],
+                ScheduleExpression="rate(1 minute)",
+                Targets=[
+                    ts.events.Target(
+                        "%sScheduleTarget" % self.backlog_fn_name,
+                        Arn=self.backlog_lambda.get_att("Arn"),
+                        Id="1"
+                    )
+                ]
+            )
+        )
+
+        self.backlog_lambda_schedule_permission = self._res(
+            ts.awslambda.Permission(
+                "%sSchedulePermission" % self.backlog_fn_name,
+                DependsOn=[
+                    self.backlog_lambda.title,
+                    self.backlog_lambda_schedule.title,
+                ],
+                Action="lambda:InvokeFunction",
+                FunctionName=self.backlog_lambda.get_att("Arn"),
+                Principal="events.amazonaws.com",
+                SourceArn=self.backlog_lambda_schedule.get_att("Arn"),
+            )
+        )
 
     def _create_api_gateway(self):
         # Create REST api
@@ -408,7 +542,7 @@ class BackendTemplateFactory:
         )
 
     def _create_sqs(self):
-        self.image_processing_queue = self._res(troposphere.sqs.Queue(
+        self.image_processing_queue = self._res(ts.sqs.Queue(
             "ImageProcessingQueue",
             FifoQueue=True,
             VisibilityTimeout=300,
@@ -1008,9 +1142,9 @@ class BackendTemplateFactory:
         self.image_processing_scale_up_alarm = self._res(ts.cloudwatch.Alarm(
             "ImageProcessingScaleUpAlarm",
             ComparisonOperator="GreaterThanOrEqualToThreshold",
-            Threshold=self.scale_up_threshold,
+            Threshold=1.0,
             Namespace="ImageProcessingService",
-            MetricName="PipelineWaitingItems",
+            MetricName="BacklogPerInstance",
             Dimensions=[ts.cloudwatch.MetricDimension(
                 Name="ClusterName",
                 Value=ts.Select(1, ts.Split("/", self.image_processing_cluster.get_att("Arn"))))],
@@ -1026,9 +1160,9 @@ class BackendTemplateFactory:
         self.image_processing_scale_down_alarm = self._res(ts.cloudwatch.Alarm(
             "ImageProcessingScaleDownAlarm",
             ComparisonOperator="LessThanThreshold",
-            Threshold=self.scale_down_threshold,
+            Threshold=0.1,
             Namespace="ImageProcessingService",
-            MetricName="PipelineWaitingItems",
+            MetricName="BacklogPerInstance",
             Dimensions=[ts.cloudwatch.MetricDimension(
                 Name="ClusterName",
                 Value=ts.Select(1, ts.Split("/", self.image_processing_cluster.get_att("Arn"))))],
