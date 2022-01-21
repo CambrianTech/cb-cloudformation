@@ -459,16 +459,25 @@ class BackendTemplateFactory:
             )
         )
 
-        self.api_image_processing_process_resource = self._res(
+        self.api_image_processing_segment_resource = self._res(
             ts.apigateway.Resource(
-                "ImageProcessingProcessResource",
+                "ImageProcessingSegmentResource",
                 ParentId=self.api_image_processing.ref(),
                 RestApiId=self.rest_api.ref(),
-                PathPart="process"
+                PathPart="segment"
             )
         )
 
-        self.api_image_processing_process_role = self._res(
+        self.api_image_processing_segment_key_resource = self._res(
+            ts.apigateway.Resource(
+                "ImageProcessingSegmentKeyResource",
+                ParentId=self.api_image_processing_segment_resource.ref(),
+                RestApiId=self.rest_api.ref(),
+                PathPart="{key}"
+            )
+        )
+
+        self.api_image_processing_segment_role = self._res(
             ts.iam.Role(
                 "ImageProcessingProcessRole",
                 DependsOn=[self.image_processing_queue.title],
@@ -507,30 +516,51 @@ class BackendTemplateFactory:
             ts.apigateway.Method(
                 "ImageProcessingMethod",
                 DependsOn=[
-                    self.api_image_processing_process_role.title,
+                    self.api_image_processing_segment_role.title,
                     self.image_processing_queue.title,
-                    self.api_image_processing_process_resource.title,
+                    self.api_image_processing_segment_key_resource.title,
                 ],
-                HttpMethod="POST",
-                ResourceId=self.api_image_processing_process_resource.ref(),
+                HttpMethod="GET",
+                ResourceId=self.api_image_processing_segment_key_resource.ref(),
                 RestApiId=self.rest_api.ref(),
                 AuthorizationType="NONE",
+                RequestParameters={
+                    "method.request.querystring.MessageBody": False,
+                },
                 Integration=ts.apigateway.Integration(
                     Type="AWS",
-                    Credentials=GetAtt(self.api_image_processing_process_role, "Arn"),
+                    Credentials=GetAtt(self.api_image_processing_segment_role, "Arn"),
                     IntegrationHttpMethod="POST",
                     IntegrationResponses=[
                         ts.apigateway.IntegrationResponse(
                             "ImageProcessingIntegrationResponse",
-                            StatusCode="200"
+                            StatusCode="200",
+                            ResponseTemplates={
+                                "application/json": "\n".join([
+                                    "#set($key = $util.escapeJavaScript($input.params('key')))",
+                                    "#set($inputRoot = $input.path('$'))",
+                                    "{",
+                                    "    \"lighting_url\": \"$key/lighting.png\"",
+                                    "    \"semantic_url\": \"$key/mask.png\"",
+                                    "    \"data_url\": \"$key/data_v3.json\"",
+                                    "    \"data_v3_url\": \"$key/data_v3.json\"",
+                                    "}",
+                                ])
+                            }
                         )
                     ],
                     Uri=ts.Sub("arn:aws:apigateway:${AWS::Region}:sqs:action/SendMessage"),
                     RequestParameters={
-                        "integration.request.querystring.MessageBody": "method.request.body",
                         "integration.request.querystring.QueueUrl": ts.Join("", ["'", self.image_processing_queue.ref(), "'"]),
                         "integration.request.querystring.MessageGroupId": "'default'",
-                    }
+                    },
+                    RequestTemplates={
+                        "application/json": "\n".join([
+                            "#set($key = $util.escapeJavaScript($input.params('key')))",
+                            "#set($context.requestOverride.querystring.MessageBody = \"{\"\"image_s3_key\"\": \"\"$key\"\"}\")",
+                        ])
+                    },
+                    PassthroughBehavior="NEVER",
                 ),
                 MethodResponses=[
                     ts.apigateway.MethodResponse(
