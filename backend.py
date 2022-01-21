@@ -540,9 +540,9 @@ class BackendTemplateFactory:
                                     "#set($key = $util.escapeJavaScript($input.params('key')))",
                                     "#set($inputRoot = $input.path('$'))",
                                     "{",
-                                    "    \"lighting_url\": \"$key/lighting.png\"",
-                                    "    \"semantic_url\": \"$key/mask.png\"",
-                                    "    \"data_url\": \"$key/data_v3.json\"",
+                                    "    \"lighting_url\": \"$key/lighting.png\",",
+                                    "    \"semantic_url\": \"$key/mask.png\",",
+                                    "    \"data_url\": \"$key/data_v3.json\",",
                                     "    \"data_v3_url\": \"$key/data_v3.json\"",
                                     "}",
                                 ])
@@ -740,7 +740,6 @@ class BackendTemplateFactory:
             LaunchConfigurationName=self.image_processing_launch_config.ref(),
             MinSize=self.param_min_instances.ref(),
             MaxSize=self.param_max_instances.ref(),
-            DesiredCapacity=self.param_min_instances.ref(),
 
             # Wait 5 minutes before timing out when not receiving health signal
             CreationPolicy=ts.policies.CreationPolicy(
