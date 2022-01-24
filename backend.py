@@ -8,7 +8,7 @@ import troposphere.s3
 import troposphere.ecs
 import troposphere.cloudformation
 import troposphere.autoscaling
-import troposphere.elasticloadbalancing
+import troposphere.elasticloadbalancingv2
 import troposphere.policies
 import troposphere.ecr
 import troposphere.helpers
@@ -29,8 +29,7 @@ class BackendTemplateFactory:
 
     planes_port = 8081
 
-    def create_template(self, use_gpu, cluster_key_name=None) -> ts.Template:
-        self.use_gpu = use_gpu
+    def create_template(self, cluster_key_name=None) -> ts.Template:
         self.cluster_key_name = cluster_key_name
 
         self.template = ts.Template("Cambrian image processing backend")
@@ -700,7 +699,7 @@ class BackendTemplateFactory:
             ),
             ImageId=ts.FindInMap("ImageProcessingInstanceId", ts.Ref(
                 ts.AWS_REGION), "AMI"),  # TODO: Map name automatic
-            InstanceType="g4dn.2xlarge" if self.use_gpu else "t3.medium",
+            InstanceType="g4dn.2xlarge",
             UserData=ts.Base64(
                 # https://github.com/DiUS/cloudformation-templates/blob/b0dbf24f62dfa7c6867908cda168598f318bd6e3/ECS/ecs-cluster.template#L341-L365
                 ts.Join("", [
@@ -736,60 +735,58 @@ class BackendTemplateFactory:
 
         self.image_processing_auto_scaling_group = self._res(ts.autoscaling.AutoScalingGroup(
             "ImageProcessingAutoScalingGroup",
+            DependsOn=[self.image_processing_cluster.title],
             VPCZoneIdentifier=[self.pub_sub.ref(), self.pub_sub2.ref()],
             LaunchConfigurationName=self.image_processing_launch_config.ref(),
             MinSize=self.param_min_instances.ref(),
             MaxSize=self.param_max_instances.ref(),
+            NewInstancesProtectedFromScaleIn=True,
 
             # Wait 5 minutes before timing out when not receiving health signal
             CreationPolicy=ts.policies.CreationPolicy(
                 ResourceSignal=ts.policies.ResourceSignal(
-                    Timeout="PT5M"
+                    Timeout="PT5M",
+                    Count=self.param_min_instances.ref(),
                 )
             ),
             UpdatePolicy=ts.policies.UpdatePolicy(
                 AutoScalingRollingUpdate=ts.policies.AutoScalingRollingUpdate(
-                    MinInstancesInService=self.param_min_instances.ref(),
-                    MaxBatchSize=1,
+                    MinSuccessfulInstancesPercent=100,
                     PauseTime="PT5M",
-                    WaitOnResourceSignals=True
+                    WaitOnResourceSignals=True,
+                    SuspendProcesses=[
+                        "AddToLoadBalancer",
+                        "AlarmNotification",
+                        "AZRebalance",
+                        "HealthCheck",
+                        "ReplaceUnhealthy",
+                        "ScheduleActions",
+                    ]
                 )
             )
         ))
 
-        # Create service and instance roles
-        self.image_processing_service_role = self._res(ts.iam.Role(
-            "ImageProcessingServiceRole",
-            Path="/",
-            AssumeRolePolicyDocument={
-                "Version": "2012-10-17",
-                "Statement": [{
-                    "Action": ["sts:AssumeRole"],
-                    "Effect": "Allow",
-                    "Principal": {
-                        "Service": ["ecs.amazonaws.com"]
-                    }
-                }]
-            },
-            Policies=[ts.iam.Policy(
-                PolicyName="ImageProcessingServicePolicy",
-                PolicyDocument={
-                    "Version": "2012-10-17",
-                    "Statement": [{
-                        "Action": [
-                            "ec2:AuthorizeSecurityGroupIngress",
-                            "ec2:Describe*",
-                            "elasticloadbalancing:DeregisterInstancesFromLoadBalancer",
-                            "elasticloadbalancing:DeregisterTargets",
-                            "elasticloadbalancing:Describe*",
-                            "elasticloadbalancing:RegisterInstancesWithLoadBalancer",
-                            "elasticloadbalancing:RegisterTargets"
-                        ],
-                        "Effect": "Allow",
-                        "Resource": "*"
-                    }]
-                }
-            )]
+        self.cluster_capacity_provider = self._res(ts.ecs.CapacityProvider(
+            "ImageProcessingClusterCapacityProvider",
+            DependsOn=[self.image_processing_cluster.title],
+            AutoScalingGroupProvider=troposphere.ecs.AutoScalingGroupProvider(
+                AutoScalingGroupArn=self.image_processing_auto_scaling_group.ref(),
+                ManagedScaling=troposphere.ecs.ManagedScaling(
+                    Status="ENABLED",
+                    TargetCapacity=100,
+                ),
+                ManagedTerminationProtection="ENABLED",
+            ),
+        ))
+
+        self.cluster_capacity_provider_associations = self._res(ts.ecs.ClusterCapacityProviderAssociations(
+            "ImageProcessingClusterCapacityProviderAssociations",
+            Cluster=self.image_processing_cluster.ref(),
+            CapacityProviders=[self.cluster_capacity_provider.ref()],
+            DefaultCapacityProviderStrategy=[troposphere.ecs.CapacityProviderStrategy(
+                CapacityProvider=self.cluster_capacity_provider.ref(),
+                Weight=1,
+            )],
         ))
 
         self.image_processing_instance_role = self._res(ts.iam.Role(
@@ -890,71 +887,6 @@ class BackendTemplateFactory:
             Roles=[self.image_processing_instance_role.ref()]
         ))
 
-        """
-        # Create ECR
-        self.image_processing_ecr_repo = self._res(ts.ecr.Repository(
-            "ImageProcessingECRRepository",
-            RepositoryName=self.ecr_repository_name,
-            RepositoryPolicyText={
-                "Version": "2008-10-17",
-                "Statement": [{
-                    "Action": [
-                        "ecr:GetDownloadUrlForLayer",
-                        "ecr:BatchGetImage",
-                        "ecr:BatchCheckLayerAvailability",
-                        "ecr:PutImage",
-                        "ecr:InitiateLayerUpload",
-                        "ecr:UploadLayerPart",
-                        "ecr:CompleteLayerUpload"
-                    ],
-                    "Effect": "Allow",
-                    "Principal": {
-                        "AWS": ts.Sub("arn:aws:iam::${AWS::AccountId}:root")
-                    }
-                }]
-            }
-        ))
-        """
-
-        # Create load balancer
-        self.image_processing_load_balancer_sg = self._res(ts.ec2.SecurityGroup(
-            "ImageProcessingLoadBalancerSG",
-            GroupDescription="Allow TCP traffic on 8080",
-            VpcId=self.vpc.ref(),
-            SecurityGroupIngress=[
-                ts.ec2.SecurityGroupRule(
-                    "ImageProcessingLoadBalancerSGIngress",
-                    CidrIp="0.0.0.0/0",
-                    IpProtocol="tcp",
-                    FromPort=8080,
-                    ToPort=8080
-                ),
-            ]
-        ))
-
-        self.image_processing_load_balancer = self._res(ts.elasticloadbalancing.LoadBalancer(
-            "ImageProcessingLoadBalancer",
-            DependsOn=[
-                self.image_processing_load_balancer_sg.title,
-                self.internet_gateway.title,
-            ],
-            Subnets=[self.pub_sub.ref(), self.pub_sub2.ref()],
-            Listeners=[ts.elasticloadbalancing.Listener(
-                LoadBalancerPort=8080,
-                InstancePort=8080,
-                Protocol="HTTP"
-            )],
-            SecurityGroups=[self.image_processing_load_balancer_sg.ref()],
-            HealthCheck=ts.elasticloadbalancing.HealthCheck(
-                Target="HTTP:8080/healthcheck",
-                HealthyThreshold="2",
-                UnhealthyThreshold="10",
-                Interval="45",
-                Timeout=5
-            ),
-            Tags=self.tags_stack_id
-        ))
-
         self.image_processing_log_group = self._res(ts.logs.LogGroup(
             "ImageProcessingLogGroup",
             RetentionInDays=14,
@@ -978,7 +910,7 @@ class BackendTemplateFactory:
                         # a custom AMI that uses the nvidia runtime for all containers
                         # which will automatically share all GPUs.
                         #ts.ecs.ResourceRequirement(Type="GPU", Value="1")
-                    ] if self.use_gpu else [],
+                    ],
                     Image=self.param_ecr_repository_name.ref(),
                     LogConfiguration=ts.ecs.LogConfiguration(
                         LogDriver="awslogs",
@@ -995,7 +927,13 @@ class BackendTemplateFactory:
                         ts.ecs.Environment(Name="PLANES_ADDRESS", Value="http://%s:%d" % (self.planes_container_name, self.planes_port)),
                         ts.ecs.Environment(Name="SQS_QUEUE_NAME", Value=GetAtt(self.image_processing_queue, "QueueName")),
                     ],
-                    Links=[self.planes_container_name]
+                    Links=[self.planes_container_name],
+                    HealthCheck=troposphere.ecs.HealthCheck(
+                        Command=["CMD-SHELL", "curl -f http://localhost:8080/healthcheck || exit 1"],
+                        Interval=45,
+                        Retries=10,
+                        Timeout=5,
+                    ),
                 ),
                 ts.ecs.ContainerDefinition(
                     Name=self.planes_container_name,
@@ -1007,7 +945,7 @@ class BackendTemplateFactory:
                     MemoryReservation=10000,
                     ResourceRequirements=[
                         ts.ecs.ResourceRequirement(Type="GPU", Value="1")
-                    ] if self.use_gpu else [],
+                    ],
                     Image=self.param_ecr_planes_repository_name.ref(),
                     LogConfiguration=ts.ecs.LogConfiguration(
                         LogDriver="awslogs",
@@ -1024,20 +962,24 @@ class BackendTemplateFactory:
         # Create ECS service on cluster
         self.image_processing_service = self._res(ts.ecs.Service(
             "ImageProcessingService",
-            DependsOn=self.image_processing_auto_scaling_group.title,
+            DependsOn=[
+                self.image_processing_auto_scaling_group.title,
+                self.cluster_capacity_provider.title,
+                self.image_processing_cluster.title,
+            ],
             Cluster=self.image_processing_cluster.ref(),
             DesiredCount=self.param_min_instances.ref(),
             DeploymentConfiguration=ts.ecs.DeploymentConfiguration(
                 MaximumPercent=100,
                 MinimumHealthyPercent=0  # 0% Needed for dev updates
             ),
-            LoadBalancers=[ts.ecs.LoadBalancer(
-                ContainerName=self.image_processing_container_name,
-                ContainerPort=8080,
-                LoadBalancerName=self.image_processing_load_balancer.ref()
-            )],
-            Role=self.image_processing_service_role.ref(),
-            TaskDefinition=self.image_processing_task_def.ref()
+            TaskDefinition=self.image_processing_task_def.ref(),
+            CapacityProviderStrategy=[
+                troposphere.ecs.CapacityProviderStrategyItem(
+                    CapacityProvider=self.cluster_capacity_provider.ref(),
+                    Weight=1,
+                ),
+            ]
         ))
 
     def _create_api_stage(self):
@@ -1150,27 +1092,10 @@ class BackendTemplateFactory:
             )
         ))
 
-        # Create instance scaling policies
-        self.image_processing_scale_up_policy = self._res(ts.autoscaling.ScalingPolicy(
-            "ImageProcessingScaleUpPolicy",
-            AutoScalingGroupName=self.image_processing_auto_scaling_group.ref(),
-            AdjustmentType="ChangeInCapacity",
-            Cooldown=300,
-            ScalingAdjustment=1
-        ))
-
-        self.image_processing_scale_down_policy = self._res(ts.autoscaling.ScalingPolicy(
-            "ImageProcessingScaleDownPolicy",
-            AutoScalingGroupName=self.image_processing_auto_scaling_group.ref(),
-            AdjustmentType="ChangeInCapacity",
-            Cooldown=300,
-            ScalingAdjustment=-1
-        ))
-
         # Create alarms
         self.image_processing_scale_up_alarm = self._res(ts.cloudwatch.Alarm(
             "ImageProcessingScaleUpAlarm",
-            ComparisonOperator="GreaterThanOrEqualToThreshold",
+            ComparisonOperator="GreaterThanThreshold",
             Threshold=1.0,
             Namespace="ImageProcessingService",
             MetricName="BacklogPerInstance",
@@ -1182,7 +1107,6 @@ class BackendTemplateFactory:
             EvaluationPeriods=1,
             AlarmActions=[
                 self.image_processing_container_scale_up_policy.ref(),
-                self.image_processing_scale_up_policy.ref()
             ]
         ))
 
@@ -1200,7 +1124,6 @@ class BackendTemplateFactory:
             EvaluationPeriods=2,
             AlarmActions=[
                 self.image_processing_container_scale_down_policy.ref(),
-                self.image_processing_scale_down_policy.ref()
             ]
         ))
 
@@ -1208,17 +1131,16 @@ class BackendTemplateFactory:
 def main():
     template_factory = BackendTemplateFactory()
 
-    def _write_template(path, use_gpu):
-        print("-- Writing backend template with use_gpu =", use_gpu, "to", path)
-        template = template_factory.create_template(use_gpu=use_gpu)
+    def _write_template(path):
+        print("-- Writing backend template to", path)
+        template = template_factory.create_template()
 
         template_yaml = template.to_yaml()
 
         with open(path, "w") as output_file:
             output_file.write(template_yaml)
 
-    _write_template("backend.yml", use_gpu=True)
-    _write_template("backend_cpu.yml", use_gpu=False)
+    _write_template("backend.yml")
 
 
 if __name__ == "__main__":
