@@ -17,7 +17,7 @@ jobs:
         run: pip install -r requirements.txt
       - name: Generate backend templates
         run: |
-          cd cb-cloudformation
+          cd cbcloudformation
           python generate.py backend ../templates/backend.yml
           python generate.py frontendpipeline ../templates/frontendpipeline.yml
           cd ..
