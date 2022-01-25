@@ -1140,7 +1140,9 @@ def main():
         with open(path, "w") as output_file:
             output_file.write(template_yaml)
 
-    _write_template("backend.yml")
+    output_dir = Path("templates")
+    output_dir.mkdir(exist_ok=True)
+    _write_template(output_dir / "backend.yml")
 
 
 if __name__ == "__main__":
