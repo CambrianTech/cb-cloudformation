@@ -15,11 +15,12 @@ jobs:
           cache: "pip"
       - name: Setup dependencies
         run: pip install troposphere
-      - name: Generate templates
-        run: python backend.py
+      - name: Generate backend templates
+        run: python backend.py && python frontendpipeline.py
       - name: Create release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, "refs/tags/")
         with:
           files: |
             templates/backend.yml
+            templates/frontendpipeline.yml

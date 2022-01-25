@@ -1,17 +1,15 @@
+from pathlib import Path
 import troposphere as ts
 import troposphere.codepipeline
 import troposphere.sns
 import troposphere.codebuild
 import troposphere.iam
-from random import randint
 
 
 class FrontendTemplateFactory:
     def create_template(self) -> ts.Template:
         self.template = ts.Template(
             "Frontend deployment pipeline with approval process")
-
-        self.random_id = randint(0, 100000000)
 
         self._create_parameters()
         self._create_permissions()
@@ -114,19 +112,26 @@ class FrontendTemplateFactory:
         self.param_github_oauth = self.template.add_parameter(ts.Parameter(
             "GitHubOAuthToken",
             Type="String",
-            Default="25e6bd223c762f0dcdc54c698a2436bb50bcab49",
+            Default="",
             Description="OAuth Token for accessing the GitHub repository. See https://docs.aws.amazon.com/codebuild/latest/userguide/sample-access-tokens.html for more information."
+        ))
+
+        self.param_random_id = self.template.add_parameter(ts.Parameter(
+            "PipelineId",
+            Type="Number",
+            Default="0",
+            Description="Unique identifier for the frontend pipeline. No two pipeline stacks should use the same id."
         ))
 
     def _create_permissions(self):
         self.pipeline_role = self._res(ts.iam.Role(
             "PipelineRole",
             RoleName=ts.Sub(
-                "AWSCodePipelineServiceRole-${AWS::Region}-Frontend-${Id}", Id=self.random_id),
+                "AWSCodePipelineServiceRole-${AWS::Region}-Frontend-${Id}", Id=self.param_random_id.ref()),
             Path="/service-role/",
             Policies=[ts.iam.Policy(
                 PolicyName=ts.Sub(
-                    "AWSCodePipelineServiceRole-${AWS::Region}-Frontend-${Id}", Id=self.random_id),
+                    "AWSCodePipelineServiceRole-${AWS::Region}-Frontend-${Id}", Id=self.param_random_id.ref()),
                 PolicyDocument={
                     "Version": "2012-10-17",
                     "Statement": [
@@ -290,11 +295,11 @@ class FrontendTemplateFactory:
         self.codebuild_role = self._res(ts.iam.Role(
             "CodebuildRole",
             RoleName=ts.Sub(
-                "codebuild-Frontend-Build-${Id}-service-role", Id=self.random_id),
+                "codebuild-Frontend-Build-${Id}-service-role", Id=self.param_random_id.ref()),
             Path="/service-role/",
             Policies=[ts.iam.Policy(
                 PolicyName=ts.Sub(
-                    "codebuild-Frontend-Build-${Id}-service-role", Id=self.random_id),
+                    "codebuild-Frontend-Build-${Id}-service-role", Id=self.param_random_id.ref()),
                 PolicyDocument={
                     "Version": "2012-10-17",
                     "Statement": [
@@ -419,7 +424,7 @@ class FrontendTemplateFactory:
         )
 
     def _create_build_stage(self):
-        project_name = ts.Sub("Frontend-Build-${Id}", Id=self.random_id)
+        project_name = ts.Sub("Frontend-Build-${Id}", Id=self.param_random_id.ref())
 
         self._res(
             ts.codebuild.Project(
@@ -583,7 +588,7 @@ class FrontendTemplateFactory:
         )
 
     def _create_pipeline(self):
-        pipeline_name = ts.Sub("Frontend-${Id}", Id=self.random_id)
+        pipeline_name = ts.Sub("Frontend-${Id}", Id=self.param_random_id.ref())
 
         self._res(ts.codepipeline.Pipeline(
             "Frontend",
@@ -610,9 +615,9 @@ def main():
 
     template_yaml = template.to_yaml()
 
-    print(template_yaml)
-
-    with open("frontendpipeline.yml", "w") as output_file:
+    output_dir = Path("templates")
+    output_dir.mkdir(exist_ok=True)
+    with open(output_dir / "frontendpipeline.yml", "w") as output_file:
         output_file.write(template_yaml)
 
 
