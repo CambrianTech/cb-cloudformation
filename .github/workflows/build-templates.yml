@@ -16,7 +16,11 @@ jobs:
       - name: Install requirements
         run: pip install -r requirements.txt
       - name: Generate backend templates
-        run: python backend.py && python frontendpipeline.py
+        run: |
+          cd cb-cloudformation
+          python generate.py backend ../templates/backend.yml
+          python generate.py frontendpipeline ../templates/frontendpipeline.yml
+          cd ..
       - name: Create release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
