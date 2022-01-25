@@ -593,9 +593,6 @@ class BackendTemplateFactory:
             # containers run with the nvidia runtime in order to share GPUs between them.
             # See https://github.com/aws/containers-roadmap/issues/327#issuecomment-471162879
             "us-east-1": {"AMI": "ami-078703383d34ae5ba"},
-            "us-east-2": {"AMI": "ami-0c45dd0e1ef99bcf2"},
-            "us-west-1": {"AMI": "ami-0ddd4f56f0468c9c4"},
-            "us-west-2": {"AMI": "ami-0a36be2e955646bb2"},
         })
 
         sg_rules = [
@@ -626,7 +623,6 @@ class BackendTemplateFactory:
             VpcId=self.vpc.ref(),
             SecurityGroupIngress=sg_rules
         ))
-
 
         self.image_processing_launch_config = self._res(ts.autoscaling.LaunchConfiguration(
             "ImageProcessingLaunchConfiguration",
@@ -731,7 +727,6 @@ class BackendTemplateFactory:
             # necessary for 1 minute metrics (5 minute is default)
             InstanceMonitoring=True,
             AssociatePublicIpAddress=True,
-            # KeyName="imageprocessing-instance"
         ))
 
         self.image_processing_auto_scaling_group = self._res(ts.autoscaling.AutoScalingGroup(
@@ -779,13 +774,14 @@ class BackendTemplateFactory:
                 ManagedTerminationProtection="ENABLED",
             ),
         ))
-
+        
         self.cluster_capacity_provider_associations = self._res(ts.ecs.ClusterCapacityProviderAssociations(
             "ImageProcessingClusterCapacityProviderAssociations",
             Cluster=self.image_processing_cluster.ref(),
             CapacityProviders=[self.cluster_capacity_provider.ref()],
             DefaultCapacityProviderStrategy=[troposphere.ecs.CapacityProviderStrategy(
                 CapacityProvider=self.cluster_capacity_provider.ref(),
+                Base=1,
                 Weight=1,
             )],
         ))
@@ -978,6 +974,7 @@ class BackendTemplateFactory:
             CapacityProviderStrategy=[
                 troposphere.ecs.CapacityProviderStrategyItem(
                     CapacityProvider=self.cluster_capacity_provider.ref(),
+                    Base=1,
                     Weight=1,
                 ),
             ]
