@@ -13,8 +13,8 @@ jobs:
         with:
           python-version: '3.10'
           cache: 'pip'
-      - name: Setup dependencies
-        run: pip install troposphere
+      - name: Install requirements
+        run: pip install -r requirements.txt
       - name: Generate backend templates
         run: python backend.py && python frontendpipeline.py
       - name: Create release

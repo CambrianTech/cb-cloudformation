@@ -1,3 +1,4 @@
+from pathlib import Path
 import troposphere as ts
 from troposphere import GetAtt
 import troposphere.ec2
