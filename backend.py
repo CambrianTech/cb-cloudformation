@@ -765,9 +765,9 @@ class BackendTemplateFactory:
         self.cluster_capacity_provider = self._res(ts.ecs.CapacityProvider(
             "ImageProcessingClusterCapacityProvider",
             DependsOn=[self.image_processing_cluster.title],
-            AutoScalingGroupProvider=troposphere.ecs.AutoScalingGroupProvider(
+            AutoScalingGroupProvider=ts.ecs.AutoScalingGroupProvider(
                 AutoScalingGroupArn=self.image_processing_auto_scaling_group.ref(),
-                ManagedScaling=troposphere.ecs.ManagedScaling(
+                ManagedScaling=ts.ecs.ManagedScaling(
                     Status="ENABLED",
                     TargetCapacity=100,
                 ),
@@ -779,7 +779,7 @@ class BackendTemplateFactory:
             "ImageProcessingClusterCapacityProviderAssociations",
             Cluster=self.image_processing_cluster.ref(),
             CapacityProviders=[self.cluster_capacity_provider.ref()],
-            DefaultCapacityProviderStrategy=[troposphere.ecs.CapacityProviderStrategy(
+            DefaultCapacityProviderStrategy=[ts.ecs.CapacityProviderStrategy(
                 CapacityProvider=self.cluster_capacity_provider.ref(),
                 Base=1,
                 Weight=1,
@@ -925,7 +925,7 @@ class BackendTemplateFactory:
                         ts.ecs.Environment(Name="SQS_QUEUE_NAME", Value=GetAtt(self.image_processing_queue, "QueueName")),
                     ],
                     Links=[self.planes_container_name],
-                    HealthCheck=troposphere.ecs.HealthCheck(
+                    HealthCheck=ts.ecs.HealthCheck(
                         Command=["CMD-SHELL", "curl -f http://localhost:8080/healthcheck || exit 1"],
                         Interval=45,
                         Retries=10,
@@ -972,7 +972,7 @@ class BackendTemplateFactory:
             ),
             TaskDefinition=self.image_processing_task_def.ref(),
             CapacityProviderStrategy=[
-                troposphere.ecs.CapacityProviderStrategyItem(
+                ts.ecs.CapacityProviderStrategyItem(
                     CapacityProvider=self.cluster_capacity_provider.ref(),
                     Base=1,
                     Weight=1,
