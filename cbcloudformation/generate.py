@@ -1,7 +1,6 @@
-from argparse import ArgumentError
+from pathlib import Path
 import click
 import troposphere as ts
-
 
 @click.command()
 @click.argument("template-type", type=click.Choice(["backend", "frontendpipeline"]))
@@ -16,9 +15,11 @@ def main(template_type, output_path):
         template = ts.Template("Frontend deployment pipeline with approval process")
         create_frontendpipeline(template)
     else:
-        raise ArgumentError("Unknown template type %s." % template_type)
+        raise Exception("Unknown template type %s." % template_type)
     
     template_yaml = template.to_yaml()
+    output_path = Path(output_path)
+    output_path.parent.mkdir(exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as output_file:
         output_file.write(template_yaml)
 
