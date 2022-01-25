@@ -6,10 +6,9 @@ import troposphere.codebuild
 import troposphere.iam
 
 
-class FrontendTemplateFactory:
-    def create_template(self) -> ts.Template:
-        self.template = ts.Template(
-            "Frontend deployment pipeline with approval process")
+class FrontendPipelineTemplateCreator:
+    def create_template(self, template: ts.Template):
+        self.template = template
 
         self._create_parameters()
         self._create_permissions()
@@ -18,8 +17,6 @@ class FrontendTemplateFactory:
         self._create_approve_stage()
         self._create_deploy_stage()
         self._create_pipeline()
-
-        return self.template
 
     def _res(self, resource):
         return self.template.add_resource(resource)
@@ -608,18 +605,7 @@ class FrontendTemplateFactory:
         ))
 
 
-def main():
-    template_factory = FrontendTemplateFactory()
+def create_frontendpipeline(template: ts.Template):
+    template_creator = FrontendPipelineTemplateCreator()
+    template_creator.create_template(template)
 
-    template = template_factory.create_template()
-
-    template_yaml = template.to_yaml()
-
-    output_dir = Path("templates")
-    output_dir.mkdir(exist_ok=True)
-    with open(output_dir / "frontendpipeline.yml", "w") as output_file:
-        output_file.write(template_yaml)
-
-
-if __name__ == "__main__":
-    main()
