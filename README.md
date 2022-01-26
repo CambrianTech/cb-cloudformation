@@ -24,3 +24,23 @@ Image processing backend.
 Web frontend pipeline for deploying to Elastic Beanstalk environments after pushes to a GitHub repository.
 1. From within `cbcloudformation/` Run `python generate.py frontendpipeline <output-path>` to create CloudFormation YAML file using troposphere.
 2. Go to AWS CloudFormation and create a stack with the created YAML file from step 2.
+
+# Architecture
+## Backend
+### User point of view / flow
+- User requestspresigned urls for uploading to an S3 bucket and associated key from API Gateway's `/GetUserUploadPresignedUrl` endpoint
+- User uploads room image to the presigned url
+- User uses API Gateway's `/ImageProcessing/segment/{key}` to request processing of the image, which immediately returns the result urls
+- User polls the result urls until they have a result or a timeout is reached
+### Server image processing
+- When `/ImageProcessing/segment/{key}` is called, a request is added to an SQS queue to process the key
+- Image processing tasks on ECS running the [cb-imageprocessingservice](https://github.com/cambrianTech/cb-imageprocessingservice) image take items out of the queue one at a time, process them and upload the results to S3 which the user is polling
+### Server task / instance autoscaling
+- The number of tasks is autoscaled up when a custom metric exceeds a threshold or is under a threshold
+- The metric is number of items in the queue per instance in the autoscaling group
+- The metric is calculated by a Lambda that runs once a minute and pushed to CloudWatch
+- Example: 3 instances and tasks are running, 7 requests come in and get added to the SQS queue, 3 get immediately taken out of the queue and start processing, 4 wait in the queue, the metric will be `4 / 3 = 1.33`
+### Server task placement
+- A task has containers using the cb-imageprocessingservice and planes images from the [cb-imageprocessingservice](https://github.com/cambrianTech/cb-imageprocessingservice) repository
+- The two containers share the same GPU which requires a custom AMI (see [here](https://github.com/aws/containers-roadmap/issues/327#issuecomment-471162879))
+- Only one of the containers specifies a GPU requirement, so only one task is placed per instance (assuming the instance type has 1 GPU)
