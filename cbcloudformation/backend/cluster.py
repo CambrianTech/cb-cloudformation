@@ -48,7 +48,7 @@ def create_cluster(
         # Currently using a custom image based on the ECS-optimized GPU image to ensure all
         # containers run with the nvidia runtime in order to share GPUs between them.
         # See https://github.com/aws/containers-roadmap/issues/327#issuecomment-471162879
-        "us-east-1": {"AMI": "ami-078703383d34ae5ba"},
+        "us-east-1": {"AMI": "ami-0817bd404ae50f662"},
     })
 
     sg_rules = [
@@ -220,6 +220,10 @@ def create_cluster(
     
     cluster_capacity_provider_associations = template.add_resource(ts.ecs.ClusterCapacityProviderAssociations(
         "ImageProcessingClusterCapacityProviderAssociations",
+        DependsOn=[
+            image_processing_cluster.title,
+            cluster_capacity_provider.title,
+        ],
         Cluster=image_processing_cluster.ref(),
         CapacityProviders=[cluster_capacity_provider.ref()],
         DefaultCapacityProviderStrategy=[ts.ecs.CapacityProviderStrategy(

@@ -28,7 +28,7 @@ Web frontend pipeline for deploying to Elastic Beanstalk environments after push
 # Architecture
 ## Backend
 ### User point of view / flow
-- User requestspresigned urls for uploading to an S3 bucket and associated key from API Gateway's `/GetUserUploadPresignedUrl` endpoint
+- User requests presigned urls for uploading to an S3 bucket and associated key from API Gateway's `/GetUserUploadPresignedUrl` endpoint
 - User uploads room image to the presigned url
 - User uses API Gateway's `/ImageProcessing/segment/{key}` to request processing of the image, which immediately returns the result urls
 - User polls the result urls until they have a result or a timeout is reached
