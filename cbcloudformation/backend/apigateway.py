@@ -103,7 +103,7 @@ def create_api_gateway(
             "ImageProcessingSegmentResource",
             ParentId=api_image_processing.ref(),
             RestApiId=rest_api.ref(),
-            PathPart="segment"
+            PathPart="planes"
         )
     )
 
