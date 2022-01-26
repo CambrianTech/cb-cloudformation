@@ -37,6 +37,7 @@ Web frontend pipeline for deploying to Elastic Beanstalk environments after push
 - Image processing tasks on ECS running the [cb-imageprocessingservice](https://github.com/cambrianTech/cb-imageprocessingservice) image take items out of the queue one at a time, process them and upload the results to S3 which the user is polling
 ### Server task / instance autoscaling
 - The number of tasks is autoscaled up when a custom metric exceeds a threshold or is under a threshold
+- Instances are automatically scaled based on the number of tasks using a [Capacity Provider](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/cluster-capacity-providers.html) 
 - The metric is number of items in the queue per instance in the autoscaling group
 - The metric is calculated by a Lambda that runs once a minute and pushed to CloudWatch
 - Example: 3 instances and tasks are running, 7 requests come in and get added to the SQS queue, 3 get immediately taken out of the queue and start processing, 4 wait in the queue, the metric will be `4 / 3 = 1.33`
