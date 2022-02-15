@@ -30,6 +30,18 @@ const autoscalingParams = {
     ]
 }
 
+function getSuccessfulResponse(body) {
+    return {
+        statusCode: 200,
+        headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-cache, no-store"
+        },
+        body: JSON.stringify(body)
+    }
+}
+
 exports.handler = async event => {
     const [attrs, autoscalingDesc] = await Promise.all([
         sqs.getQueueAttributes(sqsParams).promise(),
@@ -80,10 +92,11 @@ exports.handler = async event => {
 
     console.log("Put metric data", metricResponse)
 
-    return {
-        statusCode: 200,
-        body: JSON.stringify("Success"),
+    response = {
+        "success":true
     }
+
+    return getSuccessfulResponse(response)
 }
 
 // Env vars examples:

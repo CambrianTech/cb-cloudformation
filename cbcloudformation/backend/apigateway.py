@@ -29,12 +29,14 @@ def create_api_gateway(
     template: ts.Template,
     presigned_url_lambda: BackendPresignedUrlLambda,
     sqs: BackendSqs,
+    name="cbar",
     ) -> BackendApiGateway:
+    
     # Create REST api
     rest_api = template.add_resource(
         ts.apigateway.RestApi(
-            "RestApi",
-            Name="RestApi"
+            name,
+            Name=name
         )
     )
 
@@ -72,22 +74,10 @@ def create_api_gateway(
                     Type="AWS_PROXY",
                     IntegrationHttpMethod="POST",
                     IntegrationResponses=[
-                    ts.apigateway.IntegrationResponse(
-                        name + "Response",
-                        StatusCode="200",
-                        ResponseTemplates={
-                            "application/json": "\n".join([
-                                    #"#set($key = $util.escapeJavaScript($input.params('key')))",
-                                    "{",
-                                    "    \"success\": true,",
-                                    "    \"data_url\": \"key/data.json\"",
-                                    "}",
-                                ])
-                            }
-                        )
+                        ts.apigateway.IntegrationResponse(StatusCode="200")
                     ],
                     Uri=ts.Sub("arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations",
-                    lambdaArn=l.get_att("Arn"))
+                            lambdaArn=l.get_att("Arn"))
                 ),
                 MethodResponses=[
                     ts.apigateway.MethodResponse(
