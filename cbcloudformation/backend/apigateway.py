@@ -7,6 +7,8 @@ from .constants import presigned_url_fn_name
 from .presignedurllambda import BackendPresignedUrlLambda
 from .sqs import BackendSqs
 
+#follow for all the scripted stuff in the api-gateway like in "#set($key = $util.escapeJavaScript($input.params('key')))",
+#https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-mapping-template-reference.html
 
 BackendApiGateway = namedtuple("BackendApiGateway", [
     "rest_api",
@@ -70,10 +72,22 @@ def create_api_gateway(
                     Type="AWS_PROXY",
                     IntegrationHttpMethod="POST",
                     IntegrationResponses=[
-                        ts.apigateway.IntegrationResponse(StatusCode="200")
+                    ts.apigateway.IntegrationResponse(
+                        name + "Response",
+                        StatusCode="200",
+                        ResponseTemplates={
+                            "application/json": "\n".join([
+                                    #"#set($key = $util.escapeJavaScript($input.params('key')))",
+                                    "{",
+                                    "    \"success\": true,",
+                                    "    \"data_url\": \"key/data.json\"",
+                                    "}",
+                                ])
+                            }
+                        )
                     ],
                     Uri=ts.Sub("arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations",
-                            lambdaArn=l.get_att("Arn"))
+                    lambdaArn=l.get_att("Arn"))
                 ),
                 MethodResponses=[
                     ts.apigateway.MethodResponse(
