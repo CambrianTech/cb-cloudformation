@@ -29,14 +29,14 @@ def create_api_gateway(
     template: ts.Template,
     presigned_url_lambda: BackendPresignedUrlLambda,
     sqs: BackendSqs,
-    name="cbar",
+    gateway_name="cbar"
     ) -> BackendApiGateway:
     
     # Create REST api
     rest_api = template.add_resource(
         ts.apigateway.RestApi(
             name,
-            Name=name
+            Name="RestApi"
         )
     )
 
@@ -44,7 +44,7 @@ def create_api_gateway(
         # Create lambda permissions for api gateway
         permissions = template.add_resource(
             ts.awslambda.Permission(
-                "RestApiGet" + name + "PresignedUrlPermissions",
+                gateway_name + "Get" + name + "Permissions",
                 Action="lambda:invokeFunction",
                 Principal="apigateway.amazonaws.com",
                 FunctionName=l.get_att("Arn"),
@@ -55,7 +55,7 @@ def create_api_gateway(
 
         api = template.add_resource(
             ts.apigateway.Resource(
-                "Get" + name + "PresignedUrlRestApiResource",
+                gateway_name + "Get" + name + "Resource",
                 ParentId=rest_api.get_att("RootResourceId"),
                 RestApiId=rest_api.ref(),
                 PathPart='Get' + name + 'PresignedUrl'
@@ -64,7 +64,7 @@ def create_api_gateway(
 
         method = template.add_resource(
             ts.apigateway.Method(
-                "Get" + name + "PresignedUrlRestApiMethod",
+                gateway_name + "Get" + name + "Method",
                 DependsOn=l.title,
                 HttpMethod="GET",
                 ResourceId=api.ref(),
@@ -81,7 +81,7 @@ def create_api_gateway(
                 ),
                 MethodResponses=[
                     ts.apigateway.MethodResponse(
-                        "Get" + name + "PresignedUrlRestApiResponse",
+                        gateway_name + "Get" + name + "Response",
                         StatusCode="200"
                     )
                 ]

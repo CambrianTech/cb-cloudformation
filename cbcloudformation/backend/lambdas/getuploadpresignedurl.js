@@ -52,21 +52,27 @@ function getSuccessfulResponse(body) {
 exports.handler = async (event) => {
     console.log(`Request: ${JSON.stringify(event)}`);
 
+    // if (event.body) {
+    //     let body = JSON.parse(event.body)
+    //     console.log(`Received imagenames: ${event.queryStringParameters.imagenames}`);
+    // }
+
     if (event.queryStringParameters !== null && event.queryStringParameters !== undefined && event.queryStringParameters.imagenames) {
         console.log(`Received imagenames: ${event.queryStringParameters.imagenames}`);
 
         let uploadUrl = null;
         let key;
 
-        // If the user didn't pass a key, generate a new one and an upload url for its background image
         if (event.queryStringParameters.key) {
+            // validate the key
             if (!keyRegex.test(event.queryStringParameters.key)) {
                 console.log(`Received bad key: ${event.queryStringParameters.key}`);
                 return getBadRequestResponse();
             }
 
             key = event.queryStringParameters.key;
-        } else {
+        } else { 
+            // the user didn't pass a key, generate a new one and an upload url for its background image
             key = makeId(keyLength);
 
             uploadUrl = s3.getSignedUrl("putObject", {
