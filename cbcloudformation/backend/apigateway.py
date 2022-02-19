@@ -178,11 +178,14 @@ def create_api_gateway(
                             "application/json": "\n".join([
                                 "#set($key = $util.escapeJavaScript($input.params('key')))",
                                 "#set($inputRoot = $input.path('$'))",
+                                "#set($origin = $input.params(\"Origin\"))",
+                                "#if($origin == \"\")",
+                                  "#set($origin = $input.params(\"origin\"))",
+                                "#end",
+                                "#set($context.responseOverride.header.Access-Control-Allow-Origin = $origin)",
+                                "#set($context.responseOverride.header.Access-Control-Allow-Credentials = 'true')",
                                 "{",
-                                "    \"lighting_url\": \"$key/lighting.png\",",
-                                "    \"semantic_url\": \"$key/mask.png\",",
-                                "    \"data_url\": \"$key/data_v3.json\",",
-                                "    \"data_v3_url\": \"$key/data_v3.json\"",
+                                "    \"data_url\": \"$key/data.json\"",
                                 "}",
                             ])
                         }
