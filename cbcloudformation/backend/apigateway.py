@@ -28,12 +28,10 @@ def create_api_gateway(
     presigned_url_lambda: BackendPresignedUrlLambda,
     sqs: BackendSqs,
     ) -> BackendApiGateway:
+
     # Create REST api
     rest_api = template.add_resource(
-        ts.apigateway.RestApi(
-            "RestApi",
-            Name="RestApi"
-        )
+        ts.apigateway.RestApi("cbv4", Name="cbv4")
     )
 
     def _add_lambda(l, name, fn_name):
@@ -204,6 +202,7 @@ def create_api_gateway(
                     "ImageProcessingResponse",
                     StatusCode="200",
                     ResponseParameters={"method.response.header.Access-Control-Allow-Origin": "'*'"},
+                    ResponseModels={"application/json": "Empty"}
                 )
             ]
         ),

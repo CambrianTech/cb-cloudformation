@@ -1,3 +1,4 @@
 .vscode
 templates/
 /backend*.yml
+__pycache__
