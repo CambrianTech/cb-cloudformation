@@ -174,19 +174,11 @@ def create_api_gateway(
                     ts.apigateway.IntegrationResponse(
                         "ImageProcessingIntegrationResponse",
                         StatusCode="200",
+                        ResponseParameters={"method.response.header.Access-Control-Allow-Origin": "'*'"},
                         ResponseTemplates={
                             "application/json": "\n".join([
                                 "#set($key = $util.escapeJavaScript($input.params('key')))",
                                 "#set($inputRoot = $input.path('$'))",
-                                "#set($origin = $input.params(\"Origin\"))",
-                                "#if($origin == \"\")",
-                                  "#set($origin = $input.params(\"origin\"))",
-                                "#end",
-                                "#if($origin == \"\")",
-                                  "#set($origin = \"*\"",
-                                "#end",
-                                "#set($context.responseOverride.header.Access-Control-Allow-Origin = $origin)",
-                                "#set($context.responseOverride.header.Access-Control-Allow-Credentials = 'true')",
                                 "{",
                                 "    \"data_url\": \"$key/data.json\"",
                                 "}",
@@ -210,7 +202,8 @@ def create_api_gateway(
             MethodResponses=[
                 ts.apigateway.MethodResponse(
                     "ImageProcessingResponse",
-                    StatusCode="200"
+                    StatusCode="200",
+                    ResponseParameters={"method.response.header.Access-Control-Allow-Origin": "'*'"},
                 )
             ]
         ),
