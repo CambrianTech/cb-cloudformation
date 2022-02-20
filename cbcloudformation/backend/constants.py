@@ -1,4 +1,4 @@
-presigned_url_fn_name = "RegisterUploads"
+register_uploads_fn_name = "RegisterUploads"
 project_exists_fn_name = "ProjectExists"
 
 backlog_fn_name = "PushBacklogMetric"

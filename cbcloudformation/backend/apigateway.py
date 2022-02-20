@@ -3,21 +3,21 @@ import troposphere as ts
 import troposphere.apigateway
 import troposphere.iam
 import troposphere.awslambda
-from .constants import presigned_url_fn_name, project_exists_fn_name
-from .presignedurllambda import BackendPresignedUrlLambda
+from .constants import register_uploads_fn_name, project_exists_fn_name
+from .registeruploadslambda import BackendRegisterUploadsLambda
 from .projectexistslambda import BackendProjectExistsLambda
 from .sqs import BackendSqs
 
 BackendApiGateway = namedtuple("BackendApiGateway", [
     "rest_api",
 
-    "rest_api_get_presigned_permissions",
-    "api_get_presigned",
-    "api_get_presigned_method",
+    "register_uploads_permission",
+    "register_uploads_resource",
+    "register_uploads_method",
 
-    "rest_api_project_exists_permissions", 
-    "api_project_exists", 
-    "api_project_exists_method",
+    "project_exists_permission", 
+    "project_exists", 
+    "project_exists_method",
 
     "api_image_processing",
     "api_image_processing_segment_resource",
@@ -31,7 +31,7 @@ BackendApiGateway = namedtuple("BackendApiGateway", [
 
 def create_api_gateway(
     template: ts.Template,
-    presigned_url_lambda: BackendPresignedUrlLambda,
+    register_uploads_lambda: BackendRegisterUploadsLambda,
     project_exists_lambda: BackendProjectExistsLambda,
     sqs: BackendSqs,
     ) -> BackendApiGateway:
@@ -91,9 +91,9 @@ def create_api_gateway(
 
         return permissions, api, method
 
-    rest_api_get_presigned_permissions, api_get_presigned, api_get_presigned_method = _add_lambda(presigned_url_lambda.presigned_url_lambda, presigned_url_fn_name)
+    register_uploads_permission, register_uploads_resource, register_uploads_method = _add_lambda(register_uploads_lambda.register_uploads_lambda, register_uploads_fn_name)
 
-    rest_api_project_exists_permissions, api_project_exists, api_project_exists_method = _add_lambda(project_exists_lambda.project_exists_lambda, project_exists_fn_name)
+    project_exists_permission, project_exists, project_exists_method = _add_lambda(project_exists_lambda.project_exists_lambda, project_exists_fn_name)
 
 
     # Wire up load balancer with api gateway (url/ImageProcessing/*)
@@ -221,8 +221,7 @@ def create_api_gateway(
     api_deployment = template.add_resource(
         ts.apigateway.Deployment(
             "RestApiDeployment",
-            DependsOn=[api_get_presigned_method.title,
-                        api_image_processing_method.title],
+            DependsOn=[register_uploads_method.title, project_exists_method.title, api_image_processing_method.title],
             RestApiId=rest_api.ref()
         )
     )
@@ -239,13 +238,13 @@ def create_api_gateway(
     return BackendApiGateway(
         rest_api,
 
-        rest_api_get_presigned_permissions,
-        api_get_presigned,
-        api_get_presigned_method,
+        register_uploads_permission,
+        register_uploads_resource,
+        register_uploads_method,
 
-        rest_api_project_exists_permissions, 
-        api_project_exists, 
-        api_project_exists_method,
+        project_exists_permission, 
+        project_exists, 
+        project_exists_method,
 
         api_image_processing,
         api_image_processing_segment_resource,

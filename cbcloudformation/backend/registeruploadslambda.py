@@ -4,18 +4,17 @@ import troposphere as ts
 import troposphere.iam
 import troposphere.awslambda
 from .parameters import BackendParameters
-from .constants import presigned_url_fn_name
+from .constants import register_uploads_fn_name
 
 
-BackendPresignedUrlLambda = namedtuple("BackendPresignedUrlLambda", [
-    "presigned_url_lambda_execution_role",
-    "presigned_url_lambda",
+BackendRegisterUploadsLambda = namedtuple("BackendRegisterUploadsLambda", [
+    "register_uploads_lambda_execution_role",
+    "register_uploads_lambda",
 ])
 
-
-def create_presigned_url_lambda(template: ts.Template, params: BackendParameters) -> BackendPresignedUrlLambda:
+def create_register_uploads_lambda(template: ts.Template, params: BackendParameters) -> BackendRegisterUploadsLambda:
     # Create lambda execution role with S3 upload rights
-    presigned_url_lambda_execution_role = template.add_resource(
+    register_uploads_lambda_execution_role = template.add_resource(
         ts.iam.Role(
             "RegisterUploadsExecutionRole",
             Path="/",
@@ -71,7 +70,7 @@ def create_presigned_url_lambda(template: ts.Template, params: BackendParameters
                         "BUCKET": bucket.ref()
                     }
                 ),
-                Role=presigned_url_lambda_execution_role.get_att("Arn"),
+                Role=register_uploads_lambda_execution_role.get_att("Arn"),
                 Runtime="nodejs14.x",
                 MemorySize=128,  # TODO: Make this param
                 Timeout=3  # TODO: Make this param
@@ -79,10 +78,10 @@ def create_presigned_url_lambda(template: ts.Template, params: BackendParameters
         )
 
     # User upload
-    script_path = Path(__file__).resolve().parent / "lambdas" / "getuploadpresignedurl.js"
-    presigned_url_lambda = _create_lambda(script_path, presigned_url_fn_name, params.user_uploads_bucket_name)
+    script_path = Path(__file__).resolve().parent / "lambdas" / "registeruploads.js"
+    register_uploads_lambda = _create_lambda(script_path, register_uploads_fn_name, params.user_uploads_bucket_name)
 
-    return BackendPresignedUrlLambda(
-        presigned_url_lambda_execution_role,
-        presigned_url_lambda
+    return BackendRegisterUploadsLambda(
+        register_uploads_lambda_execution_role,
+        register_uploads_lambda
     )
