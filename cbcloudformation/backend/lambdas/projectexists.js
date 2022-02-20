@@ -40,7 +40,7 @@ exports.handler = async (event) => {
             const { ContentType } = await s3.headObject(params).promise();
             exists = true;
         } catch (err) {
-            console.log(err);
+            // console.log(err);
             // const message = `Error getting object ${prefix} from bucket ${bucket}. Make sure they exist and your bucket is in the same region as this function.`;
             // console.log(message);
         }
