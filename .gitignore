@@ -2,3 +2,4 @@
 templates/
 /backend*.yml
 __pycache__
+.DS_Store

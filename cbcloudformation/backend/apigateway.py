@@ -3,16 +3,22 @@ import troposphere as ts
 import troposphere.apigateway
 import troposphere.iam
 import troposphere.awslambda
-from .constants import presigned_url_fn_name
+from .constants import presigned_url_fn_name, project_exists_fn_name
 from .presignedurllambda import BackendPresignedUrlLambda
+from .projectexistslambda import BackendProjectExistsLambda
 from .sqs import BackendSqs
-
 
 BackendApiGateway = namedtuple("BackendApiGateway", [
     "rest_api",
+
     "rest_api_get_presigned_permissions",
     "api_get_presigned",
     "api_get_presigned_method",
+
+    "rest_api_project_exists_permissions", 
+    "api_project_exists", 
+    "api_project_exists_method",
+
     "api_image_processing",
     "api_image_processing_segment_resource",
     "api_image_processing_segment_key_resource",
@@ -26,6 +32,7 @@ BackendApiGateway = namedtuple("BackendApiGateway", [
 def create_api_gateway(
     template: ts.Template,
     presigned_url_lambda: BackendPresignedUrlLambda,
+    project_exists_lambda: BackendProjectExistsLambda,
     sqs: BackendSqs,
     ) -> BackendApiGateway:
 
@@ -85,6 +92,9 @@ def create_api_gateway(
         return permissions, api, method
 
     rest_api_get_presigned_permissions, api_get_presigned, api_get_presigned_method = _add_lambda(presigned_url_lambda.presigned_url_lambda, "UserUpload", presigned_url_fn_name)
+
+    rest_api_project_exists_permissions, api_project_exists, api_project_exists_method = _add_lambda(project_exists_lambda.project_exists_lambda, "ProjectExists", project_exists_fn_name)
+
 
     # Wire up load balancer with api gateway (url/ImageProcessing/*)
     api_image_processing = template.add_resource(
@@ -228,14 +238,21 @@ def create_api_gateway(
 
     return BackendApiGateway(
         rest_api,
+
         rest_api_get_presigned_permissions,
         api_get_presigned,
         api_get_presigned_method,
+
+        rest_api_project_exists_permissions, 
+        api_project_exists, 
+        api_project_exists_method,
+
         api_image_processing,
         api_image_processing_segment_resource,
         api_image_processing_segment_key_resource,
         api_image_processing_segment_role,
         api_image_processing_method,
+
         api_deployment,
         api_stage,
     )

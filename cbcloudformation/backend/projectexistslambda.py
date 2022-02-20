@@ -6,18 +6,16 @@ import troposphere.awslambda
 from .parameters import BackendParameters
 from .constants import project_exists_fn_name
 
-
 BackendProjectExistsLambda = namedtuple("BackendProjectExistsLambda", [
     "project_exists_lambda_execution_role",
     "project_exists_lambda",
 ])
 
-
 def create_project_exists_lambda(template: ts.Template, params: BackendParameters) -> BackendProjectExistsLambda:
     # Create lambda execution role with S3 upload rights
     project_exists_lambda_execution_role = template.add_resource(
         ts.iam.Role(
-            "GetProjectExistsExecutionRole",
+            "ProjectExistsExecutionRole",
             Path="/",
             Policies=[
                 ts.iam.Policy(
