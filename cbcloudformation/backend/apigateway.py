@@ -16,7 +16,7 @@ BackendApiGateway = namedtuple("BackendApiGateway", [
     "register_uploads_method",
 
     "project_exists_permission", 
-    "project_exists", 
+    "project_exists_resource", 
     "project_exists_method",
 
     "api_image_processing",
@@ -41,35 +41,35 @@ def create_api_gateway(
         ts.apigateway.RestApi("cbv4", Name="cbv4")
     )
 
-    def _add_lambda(l, fn_name):
+    def _add_lambda(l, fn_name, resource=rest_api):
         # Create lambda permissions for api gateway
         permissions = template.add_resource(
             ts.awslambda.Permission(
-                fn_name + "RestApiPermissions",
+                fn_name + "LambdaPermissions",
                 Action="lambda:invokeFunction",
                 Principal="apigateway.amazonaws.com",
                 FunctionName=l.get_att("Arn"),
                 SourceArn=ts.Sub("arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiName}/*/*/${funcName}",
-                apiName=rest_api.ref(), funcName=fn_name)
+                apiName=resource.ref(), funcName=fn_name)
             )
         )
 
         api = template.add_resource(
             ts.apigateway.Resource(
-                fn_name + "RestApiResource",
-                ParentId=rest_api.get_att("RootResourceId"),
-                RestApiId=rest_api.ref(),
+                fn_name + "Resource",
+                ParentId=resource.get_att("RootResourceId"),
+                RestApiId=resource.ref(),
                 PathPart=fn_name
             )
         )
 
         method = template.add_resource(
             ts.apigateway.Method(
-                fn_name + "RestApiMethod",
+                fn_name + "Method",
                 DependsOn=l.title,
                 HttpMethod="GET",
                 ResourceId=api.ref(),
-                RestApiId=rest_api.ref(),
+                RestApiId=resource.ref(),
                 AuthorizationType="NONE",
                 Integration=ts.apigateway.Integration(
                     Type="AWS_PROXY",
@@ -82,7 +82,7 @@ def create_api_gateway(
                 ),
                 MethodResponses=[
                     ts.apigateway.MethodResponse(
-                        fn_name + "RestApiResponse",
+                        fn_name + "Response",
                         StatusCode="200"
                     )
                 ]
@@ -93,7 +93,7 @@ def create_api_gateway(
 
     register_uploads_permission, register_uploads_resource, register_uploads_method = _add_lambda(register_uploads_lambda.register_uploads_lambda, register_uploads_fn_name)
 
-    project_exists_permission, project_exists, project_exists_method = _add_lambda(project_exists_lambda.project_exists_lambda, project_exists_fn_name)
+    project_exists_permission, project_exists_resource, project_exists_method = _add_lambda(project_exists_lambda.project_exists_lambda, project_exists_fn_name)
 
 
     # Wire up load balancer with api gateway (url/ImageProcessing/*)
@@ -243,7 +243,7 @@ def create_api_gateway(
         register_uploads_method,
 
         project_exists_permission, 
-        project_exists, 
+        project_exists_resource, 
         project_exists_method,
 
         api_image_processing,

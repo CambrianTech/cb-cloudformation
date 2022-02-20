@@ -7,6 +7,18 @@ const s3 = new aws.S3({ apiVersion: '2006-03-01' });
 const bucket = "cb-backend-data"
 const filename = "data.json"
 
+function getSuccessfulResponse(body) {
+    return {
+        statusCode: 200,
+        headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "no-cache, no-store"
+        },
+        body: JSON.stringify(body)
+    }
+}
+
 exports.handler = async (event) => {
     
     let key = event.key
@@ -35,11 +47,6 @@ exports.handler = async (event) => {
     } else {
         key=null
     }
-    
-    const response = {
-        statusCode: 200,
-        body: JSON.stringify({key:key, exists:exists}),
-    };
-    
-    return response;
+
+    return getSuccessfulResponse({key:key, exists:exists});
 };
