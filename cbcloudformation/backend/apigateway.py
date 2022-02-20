@@ -41,31 +41,31 @@ def create_api_gateway(
         ts.apigateway.RestApi("cbv4", Name="cbv4")
     )
 
-    def _add_lambda(l, name, fn_name):
+    def _add_lambda(l, fn_name):
         # Create lambda permissions for api gateway
         permissions = template.add_resource(
             ts.awslambda.Permission(
-                "RestApiGet" + name + "PresignedUrlPermissions",
+                fn_name + "RestApiPermissions",
                 Action="lambda:invokeFunction",
                 Principal="apigateway.amazonaws.com",
                 FunctionName=l.get_att("Arn"),
                 SourceArn=ts.Sub("arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiName}/*/*/${funcName}",
-                                apiName=rest_api.ref(), funcName=fn_name)
+                apiName=rest_api.ref(), funcName=fn_name)
             )
         )
 
         api = template.add_resource(
             ts.apigateway.Resource(
-                "Get" + name + "PresignedUrlRestApiResource",
+                fn_name + "RestApiResource",
                 ParentId=rest_api.get_att("RootResourceId"),
                 RestApiId=rest_api.ref(),
-                PathPart='Get' + name + 'PresignedUrl'
+                PathPart=fn_name
             )
         )
 
         method = template.add_resource(
             ts.apigateway.Method(
-                "Get" + name + "PresignedUrlRestApiMethod",
+                fn_name + "RestApiMethod",
                 DependsOn=l.title,
                 HttpMethod="GET",
                 ResourceId=api.ref(),
@@ -78,11 +78,11 @@ def create_api_gateway(
                         ts.apigateway.IntegrationResponse(StatusCode="200")
                     ],
                     Uri=ts.Sub("arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations",
-                            lambdaArn=l.get_att("Arn"))
+                    lambdaArn=l.get_att("Arn"))
                 ),
                 MethodResponses=[
                     ts.apigateway.MethodResponse(
-                        "Get" + name + "PresignedUrlRestApiResponse",
+                        fn_name + "RestApiResponse",
                         StatusCode="200"
                     )
                 ]
@@ -91,9 +91,9 @@ def create_api_gateway(
 
         return permissions, api, method
 
-    rest_api_get_presigned_permissions, api_get_presigned, api_get_presigned_method = _add_lambda(presigned_url_lambda.presigned_url_lambda, "UserUpload", presigned_url_fn_name)
+    rest_api_get_presigned_permissions, api_get_presigned, api_get_presigned_method = _add_lambda(presigned_url_lambda.presigned_url_lambda, presigned_url_fn_name)
 
-    rest_api_project_exists_permissions, api_project_exists, api_project_exists_method = _add_lambda(project_exists_lambda.project_exists_lambda, "ProjectExists", project_exists_fn_name)
+    rest_api_project_exists_permissions, api_project_exists, api_project_exists_method = _add_lambda(project_exists_lambda.project_exists_lambda, project_exists_fn_name)
 
 
     # Wire up load balancer with api gateway (url/ImageProcessing/*)

@@ -18,7 +18,7 @@ Image processing backend.
     - Configure API mappings
     - Add new mapping
     - Select the created API and click Save
-    - The backend is now reachable under that domain (ie. `domain.tld/GetUserUploadPresignedUrl` and `domain.tld/ImageProcessing/segment/{key}`)
+    - The backend is now reachable under that domain (ie. `domain.tld/RegisterUploads` and `domain.tld/ImageProcessing/planes/{key}`)
 
 ## Frontend Pipeline
 Web frontend pipeline for deploying to Elastic Beanstalk environments after pushes to a GitHub repository.
@@ -28,7 +28,7 @@ Web frontend pipeline for deploying to Elastic Beanstalk environments after push
 # Architecture
 ## Backend
 ### User point of view / flow
-- User requests presigned urls for uploading to an S3 bucket and associated key from API Gateway's `/GetUserUploadPresignedUrl` endpoint
+- User requests presigned urls for uploading to an S3 bucket and associated key from API Gateway's `/RegisterUploads` endpoint
 - User uploads room image to the presigned url
 - User uses API Gateway's `/ImageProcessing/segment/{key}` to request processing of the image, which immediately returns the result urls
 - User polls the result urls until they have a result or a timeout is reached

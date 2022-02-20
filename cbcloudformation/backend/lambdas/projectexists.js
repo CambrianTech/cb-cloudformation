@@ -9,9 +9,9 @@ const filename = "data.json"
 
 exports.handler = async (event) => {
     
-    let key = event.unique_id
-    if (!key && event.queryStringParameters && event.queryStringParameters.unique_id) {
-        key = event.queryStringParameters.unique_id
+    let key = event.key
+    if (!key && event.queryStringParameters && event.queryStringParameters.key) {
+        key = event.queryStringParameters.key
     }
     
     let exists = false
@@ -38,7 +38,7 @@ exports.handler = async (event) => {
     
     const response = {
         statusCode: 200,
-        body: JSON.stringify({unique_id:key, exists:exists}),
+        body: JSON.stringify({key:key, exists:exists}),
     };
     
     return response;

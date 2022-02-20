@@ -30,11 +30,11 @@ def create_project_exists_lambda(template: ts.Template, params: BackendParameter
                     }
                 ),
                 ts.iam.Policy(
-                    PolicyName="s3UserUpload",
+                    PolicyName="s3ListBucket",
                     PolicyDocument={
                         "Version": "2012-10-17",
                         "Statement": [{
-                            "Action": ["s3:PutObject"],
+                            "Action": ["s3:ListBucket"],
                             "Effect": "Allow",
                             "Resource": ts.Sub("arn:aws:s3:::${BucketName}/*", BucketName=params.user_uploads_bucket_name.ref()),
                         }]

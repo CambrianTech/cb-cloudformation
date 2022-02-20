@@ -17,7 +17,7 @@ def create_presigned_url_lambda(template: ts.Template, params: BackendParameters
     # Create lambda execution role with S3 upload rights
     presigned_url_lambda_execution_role = template.add_resource(
         ts.iam.Role(
-            "GetUserUploadPresignedUrlExecutionRole",
+            "RegisterUploadsExecutionRole",
             Path="/",
             Policies=[
                 ts.iam.Policy(
