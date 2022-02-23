@@ -202,7 +202,7 @@ def create_api_gateway(
                 RequestTemplates={
                     "application/json": "\n".join([
                         "#set($key = $util.escapeJavaScript($input.params('key')))",
-                        "#set($context.requestOverride.querystring.MessageBody = \"{\"\"image_s3_key\"\": \"\"$key\"\"}\")",
+                        "#set($context.requestOverride.querystring.MessageBody = \"{\"\"unique_id\"\": \"\"$key\"\"}\")",
                     ])
                 },
                 PassthroughBehavior="NEVER",
