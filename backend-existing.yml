@@ -1,0 +1,784 @@
+Description: Cambrian image processing backend
+Mappings:
+  ImageProcessingInstanceId:
+    us-east-1:
+      AMI: ami-078703383d34ae5ba
+    us-east-2:
+      AMI: ami-0c45dd0e1ef99bcf2
+    us-west-1:
+      AMI: ami-0befa174d7147c230
+    us-west-2:
+      AMI: ami-0a36be2e955646bb2
+Parameters:
+  ImageProcessingFilesBucket:
+    Default: cb-imageprocessingservice-models
+    Description: S3 bucket with the files (models etc.) that the container will download on startup.
+    Type: String
+  ImageProcessingResultsBucket:
+    Default: cb-backend-data
+    Description: S3 bucket where processed images will be stored.
+    Type: String
+  ImageProcessingServiceRepository:
+    Default: 312943975091.dkr.ecr.us-east-1.amazonaws.com/cb-imageprocessingservice:latest
+    Description: ECR Repository for the docker image to use.
+    Type: String
+  ImageProcessingUserUploadsBucket:
+    Default: cb-backend-data
+    Description: S3 bucket where user uploaded content will be stored.
+    Type: String
+  PlanesServiceRepository:
+    Default: 312943975091.dkr.ecr.us-east-1.amazonaws.com/cb-planes:latest
+    Description: ECR Repository for the planes docker image to use.
+    Type: String
+Resources:
+  AttachInternetGatewayToPublicSubdomain:
+    Properties:
+      InternetGatewayId: !Ref 'InternetGateway'
+      VpcId: !Ref 'VPC'
+    Type: AWS::EC2::VPCGatewayAttachment
+  GetUserUploadPresignedUrl:
+    Properties:
+      Code:
+        ZipFile: !Join
+          - ''
+          - - "'use strict';\n"
+            - "\n"
+            - "const AWS = require('aws-sdk');\n"
+            - "\n"
+            - "const s3 = new AWS.S3({\n"
+            - "    signatureVersion: \"v4\",\n"
+            - "});\n"
+            - "\n"
+            - "const imageNameRegex = /^[a-zA-Z0-9]+$/;\n"
+            - "const keyRegex = imageNameRegex;\n"
+            - "const signedUrlExpiryTime = 60 * 60; // Expiry time in seconds\n"
+            - "\n"
+            - "const keyLength = 10;\n"
+            - "const subKeyLength = 8;\n"
+            - "\n"
+            - "function makeId(length) {\n"
+            - "    let result = \"\";\n"
+            - "    const characters = \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789\"\
+              ;\n"
+            - "    const charactersLength = characters.length;\n"
+            - "\n"
+            - "    for (let i = 0; i < length; i++) {\n"
+            - "        result += characters.charAt(Math.floor(Math.random() * charactersLength));\n"
+            - "    }\n"
+            - "\n"
+            - "    return result;\n"
+            - "}\n"
+            - "\n"
+            - "function getBadRequestResponse() {\n"
+            - "    return {\n"
+            - "        statusCode: 400,\n"
+            - "        headers: {\n"
+            - "            \"Content-Type\": \"application/json\",\n"
+            - "            \"Access-Control-Allow-Origin\": \"*\",\n"
+            - "            \"Cache-Control\": \"no-cache, no-store\"\n"
+            - "        },\n"
+            - "        body: JSON.stringify({ error: \"Bad request\" })\n"
+            - "    }\n"
+            - "}\n"
+            - "\n"
+            - "function getSuccessfulResponse(body) {\n"
+            - "    return {\n"
+            - "        statusCode: 200,\n"
+            - "        headers: {\n"
+            - "            \"Content-Type\": \"application/json\",\n"
+            - "            \"Access-Control-Allow-Origin\": \"*\",\n"
+            - "            \"Cache-Control\": \"no-cache, no-store\"\n"
+            - "        },\n"
+            - "        body: JSON.stringify(body)\n"
+            - "    }\n"
+            - "}\n"
+            - "\n"
+            - "exports.handler = async (event) => {\n"
+            - "    console.log(`Request: ${JSON.stringify(event)}`);\n"
+            - "\n"
+            - "    if (event.queryStringParameters !== null && event.queryStringParameters\
+              \ !== undefined && event.queryStringParameters.imagenames) {\n"
+            - "        console.log(`Received imagenames: ${event.queryStringParameters.imagenames}`);\n"
+            - "\n"
+            - "        let uploadUrl = null;\n"
+            - "        let key;\n"
+            - "\n"
+            - "        // If the user didn't pass a key, generate a new one and an\
+              \ upload url for its background image\n"
+            - "        if (event.queryStringParameters.key) {\n"
+            - "            if (!keyRegex.test(event.queryStringParameters.key)) {\n"
+            - "                console.log(`Received bad key: ${event.queryStringParameters.key}`);\n"
+            - "                return getBadRequestResponse();\n"
+            - "            }\n"
+            - "\n"
+            - "            key = event.queryStringParameters.key;\n"
+            - "        } else {\n"
+            - "            key = makeId(keyLength);\n"
+            - "\n"
+            - "            uploadUrl = s3.getSignedUrl(\"putObject\", {\n"
+            - "                Bucket: process.env.BUCKET,\n"
+            - "                Key: `${key}/background`,\n"
+            - "                Expires: signedUrlExpiryTime,\n"
+            - "            });\n"
+            - "        }\n"
+            - "\n"
+            - "        // Generate a key for the subdirectory\n"
+            - "        const subKey = makeId(subKeyLength);\n"
+            - "\n"
+            - "        const imageNames = event.queryStringParameters.imagenames.split(\"\
+              ,\").map(name => name.trim());\n"
+            - "        const subUploadUrls = {};\n"
+            - "\n"
+            - "        // Create signed upload urls for each of the requested images\
+              \ within the sub-directory\n"
+            - "        for (const imageName of imageNames) {\n"
+            - "            if (!imageNameRegex.test(imageName)) {\n"
+            - "                return getBadRequestResponse();\n"
+            - "            }\n"
+            - "\n"
+            - "            const url = s3.getSignedUrl(\"putObject\", {\n"
+            - "                Bucket: process.env.BUCKET,\n"
+            - "                Key: `${key}/${subKey}/${imageName}`,\n"
+            - "                Expires: signedUrlExpiryTime,\n"
+            - "            });\n"
+            - "\n"
+            - "            subUploadUrls[imageName] = url;\n"
+            - "        }\n"
+            - "\n"
+            - "        const response = {\n"
+            - "            key: key,\n"
+            - "            subKey: subKey,\n"
+            - "            subUploadUrls: subUploadUrls,\n"
+            - "        };\n"
+            - "\n"
+            - "        if (uploadUrl) {\n"
+            - "            response.uploadUrl = uploadUrl;\n"
+            - "        }\n"
+            - "\n"
+            - "        return getSuccessfulResponse(response);\n"
+            - "    }\n"
+            - "\n"
+            - "    return getBadRequestResponse();\n"
+            - '};'
+      Environment:
+        Variables:
+          BUCKET: !Ref 'ImageProcessingUserUploadsBucket'
+      Handler: index.handler
+      MemorySize: 128
+      Role: !GetAtt 'GetUserUploadPresignedUrlExecutionRole.Arn'
+      Runtime: nodejs18.x
+      Timeout: 3
+    Type: AWS::Lambda::Function
+  GetUserUploadPresignedUrlExecutionRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - logs:*
+                Effect: Allow
+                Resource: arn:aws:logs:*:*:*
+            Version: '2012-10-17'
+          PolicyName: root
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - s3:PutObject
+                Effect: Allow
+                Resource: !Sub
+                  - arn:aws:s3:::${BucketName}/*
+                  - BucketName: !Ref 'ImageProcessingUserUploadsBucket'
+            Version: '2012-10-17'
+          PolicyName: s3UserUpload
+    Type: AWS::IAM::Role
+  GetUserUploadPresignedUrlRestApiMethod:
+    DependsOn: GetUserUploadPresignedUrl
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: GET
+      Integration:
+        IntegrationHttpMethod: POST
+        IntegrationResponses:
+          - StatusCode: '200'
+        Type: AWS_PROXY
+        Uri: !Sub
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations
+          - lambdaArn: !GetAtt 'GetUserUploadPresignedUrl.Arn'
+      MethodResponses:
+        - StatusCode: '200'
+      ResourceId: !Ref 'GetUserUploadPresignedUrlRestApiResource'
+      RestApiId: !Ref 'RestApi'
+    Type: AWS::ApiGateway::Method
+  GetUserUploadPresignedUrlRestApiResource:
+    Properties:
+      ParentId: !GetAtt 'RestApi.RootResourceId'
+      PathPart: GetUserUploadPresignedUrl
+      RestApiId: !Ref 'RestApi'
+    Type: AWS::ApiGateway::Resource
+  ImageProcessingAutoScalingGroup:
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT5M
+    Properties:
+      DesiredCapacity: 1
+      LaunchConfigurationName: !Ref 'ImageProcessingLaunchConfiguration'
+      MaxSize: 2
+      MinSize: 1
+      VPCZoneIdentifier:
+        - !Ref 'PublicSubnet'
+        - !Ref 'PublicSubnet2'
+    Type: AWS::AutoScaling::AutoScalingGroup
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MaxBatchSize: 1
+        MinInstancesInService: 1
+        PauseTime: PT5M
+        WaitOnResourceSignals: 'true'
+  ImageProcessingCluster:
+    DependsOn: VPC
+    Type: AWS::ECS::Cluster
+  ImageProcessingContainerScaleDownPolicy:
+    Properties:
+      PolicyName: ImageProcessingContainerScaleDownPolicy
+      PolicyType: StepScaling
+      ScalableDimension: ecs:service:DesiredCount
+      ScalingTargetId: !Ref 'ImageProcessingContainerScalingTarget'
+      ServiceNamespace: ecs
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 60
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalUpperBound: 0
+            ScalingAdjustment: -1
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+  ImageProcessingContainerScaleUpPolicy:
+    Properties:
+      PolicyName: ImageProcessingContainerScaleUpPolicy
+      PolicyType: StepScaling
+      ScalableDimension: ecs:service:DesiredCount
+      ScalingTargetId: !Ref 'ImageProcessingContainerScalingTarget'
+      ServiceNamespace: ecs
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 60
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalLowerBound: 0
+            ScalingAdjustment: 1
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+  ImageProcessingContainerScalingRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - application-autoscaling.amazonaws.com
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - ecs:UpdateService
+                  - ecs:DescribeServices
+                  - application-autoscaling:*
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:GetMetricStatistics
+                Effect: Allow
+                Resource: '*'
+            Version: '2012-10-17'
+          PolicyName: ImageProcessingContainerScalingRolePolicy
+    Type: AWS::IAM::Role
+  ImageProcessingContainerScalingTarget:
+    Properties:
+      MaxCapacity: 2
+      MinCapacity: 1
+      ResourceId: !Join
+        - /
+        - - service
+          - !Ref 'ImageProcessingCluster'
+          - !GetAtt 'ImageProcessingService.Name'
+      RoleARN: !GetAtt 'ImageProcessingContainerScalingRole.Arn'
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+  ImageProcessingInstanceProfile:
+    Properties:
+      Path: /
+      Roles:
+        - !Ref 'ImageProcessingInstanceRole'
+    Type: AWS::IAM::InstanceProfile
+  ImageProcessingInstanceRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - ecs:CreateCluster
+                  - ecs:RegisterContainerInstance
+                  - ecs:DeregisterContainerInstance
+                  - ecs:DiscoverPollEndpoint
+                  - ecs:Submit*
+                  - ecr:*
+                  - ecs:Poll
+                  - ecs:StartTelemetrySession
+                  - ecs:SubmitContainerStateChange
+                  - ecs:SubmitTaskStateChange
+                  - cloudwatch:PutMetricData
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Effect: Allow
+                Resource: '*'
+            Version: '2012-10-17'
+          PolicyName: ImageProcessingInstancePolicy
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Effect: Allow
+                Resource:
+                  - !Sub
+                    - arn:aws:s3:::${FilesBucketName}
+                    - FilesBucketName: !Ref 'ImageProcessingFilesBucket'
+                  - !Sub
+                    - arn:aws:s3:::${FilesBucketName}/*
+                    - FilesBucketName: !Ref 'ImageProcessingFilesBucket'
+                  - !Sub
+                    - arn:aws:s3:::${UserUploadsBucketName}
+                    - UserUploadsBucketName: !Ref 'ImageProcessingUserUploadsBucket'
+                  - !Sub
+                    - arn:aws:s3:::${UserUploadsBucketName}/*
+                    - UserUploadsBucketName: !Ref 'ImageProcessingUserUploadsBucket'
+            Version: '2012-10-17'
+          PolicyName: ImageProcessingInstancePolicyS3Files
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - s3:PutObject
+                Effect: Allow
+                Resource:
+                  - !Sub
+                    - arn:aws:s3:::${ResultsBucketName}/*
+                    - ResultsBucketName: !Ref 'ImageProcessingResultsBucket'
+            Version: '2012-10-17'
+          PolicyName: ImageProcessingInstancePolicyS3UserUploads
+    Type: AWS::IAM::Role
+  ImageProcessingInstanceSG:
+    Properties:
+      GroupDescription: Allow TCP traffic on 8080
+      SecurityGroupIngress:
+        - CidrIp: '0.0.0.0/0'
+          FromPort: 8080
+          IpProtocol: tcp
+          ToPort: 8080
+      VpcId: !Ref 'VPC'
+    Type: AWS::EC2::SecurityGroup
+  ImageProcessingLaunchConfiguration:
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          commands:
+            '01_add_instance_to_cluster':
+              command: !Join
+                - ''
+                - - "#!/bin/bash\n"
+                  - echo ECS_CLUSTER=
+                  - !Ref 'ImageProcessingCluster'
+                  - " >> /etc/ecs/ecs.config\n"
+                  - echo ECS_ENABLE_CONTAINER_METADATA=1
+                  - " >> /etc/ecs/ecs.config\n"
+                  - "echo 'OPTIONS=\"${OPTIONS} --storage-opt dm.basesize=20G\"' >>\
+                    \ /etc/sysconfig/docker\n"
+          files:
+            /etc/cfn/cfn-hup.conf:
+              content: !Sub "[main]\nstack=${AWS::StackId}\nregion=${AWS::Region}\n"
+              group: root
+              mode: '00400'
+              owner: root
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content: !Sub "[cfn-auto-reloader-hook]\ntriggers=post.update\npath=Resources.ContainerInstances.Metadata.AWS::CloudFormation::Init\n\
+                action=/opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource\
+                \ ImageProcessingLaunchConfiguration --region ${AWS::Region}\nrunas=root\n"
+          packages:
+            yum:
+              docker: []
+              ecs-init: []
+          services:
+            sysvinit:
+              cfn-hup:
+                enabled: 'true'
+                ensureRunning: 'true'
+                files:
+                  - /etc/cfn/cfn-hup.conf
+                  - /etc/cfn/hooks.d/cfn-auto-reloader.conf
+              docker:
+                enabled: 'true'
+                ensureRunning: 'true'
+    Properties:
+      AssociatePublicIpAddress: 'true'
+      IamInstanceProfile: !Ref 'ImageProcessingInstanceProfile'
+      ImageId: !FindInMap
+        - ImageProcessingInstanceId
+        - !Ref 'AWS::Region'
+        - AMI
+      InstanceMonitoring: 'true'
+      InstanceType: g4dn.2xlarge
+      SecurityGroups:
+        - !Ref 'ImageProcessingInstanceSG'
+      UserData: !Base64
+        Fn::Join:
+          - ''
+          - - "#!/bin/bash -xe\n"
+            - "yum -y update\n"
+            - "yum install -y aws-cfn-bootstrap\n"
+            - '/opt/aws/bin/cfn-init -v '
+            - ' --stack '
+            - !Ref 'AWS::StackName'
+            - ' --resource ImageProcessingLaunchConfiguration '
+            - ' --region '
+            - !Ref 'AWS::Region'
+            - "\n"
+            - '/opt/aws/bin/cfn-signal -e $? '
+            - ' --stack '
+            - !Ref 'AWS::StackName'
+            - ' --resource ImageProcessingAutoScalingGroup'
+            - ' --region '
+            - !Ref 'AWS::Region'
+            - "\n"
+    Type: AWS::AutoScaling::LaunchConfiguration
+  ImageProcessingLoadBalancer:
+    DependsOn:
+      - ImageProcessingLoadBalancerSG
+    Properties:
+      HealthCheck:
+        HealthyThreshold: '2'
+        Interval: '45'
+        Target: HTTP:8080/healthcheck
+        Timeout: 5
+        UnhealthyThreshold: '10'
+      Listeners:
+        - InstancePort: 8080
+          LoadBalancerPort: 8080
+          Protocol: HTTP
+      SecurityGroups:
+        - !Ref 'ImageProcessingLoadBalancerSG'
+      Subnets:
+        - !Ref 'PublicSubnet'
+        - !Ref 'PublicSubnet2'
+      Tags:
+        - Key: Application
+          Value: !Ref 'AWS::StackId'
+    Type: AWS::ElasticLoadBalancing::LoadBalancer
+  ImageProcessingLoadBalancerSG:
+    Properties:
+      GroupDescription: Allow TCP traffic on 8080
+      SecurityGroupIngress:
+        - CidrIp: '0.0.0.0/0'
+          FromPort: 8080
+          IpProtocol: tcp
+          ToPort: 8080
+      VpcId: !Ref 'VPC'
+    Type: AWS::EC2::SecurityGroup
+  ImageProcessingLogGroup:
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Join
+        - '-'
+        - - ImageProcessingLogGroup
+          - !Ref 'AWS::StackName'
+      RetentionInDays: 14
+    Type: AWS::Logs::LogGroup
+  ImageProcessingMethod:
+    DependsOn: ImageProcessingService
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      Integration:
+        IntegrationHttpMethod: ANY
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestParameters:
+          integration.request.path.proxy: method.request.path.proxy
+        Type: HTTP_PROXY
+        Uri: !Join
+          - ''
+          - - http://
+            - !GetAtt 'ImageProcessingLoadBalancer.DNSName'
+            - :8080
+            - /{proxy}
+      MethodResponses:
+        - StatusCode: '200'
+      RequestParameters:
+        method.request.path.proxy: 'true'
+      ResourceId: !Ref 'ImageProcessingProxyRestApiResource'
+      RestApiId: !Ref 'RestApi'
+    Type: AWS::ApiGateway::Method
+  ImageProcessingProxyRestApiResource:
+    Properties:
+      ParentId: !Ref 'ImageProcessingRestApiResource'
+      PathPart: '{proxy+}'
+      RestApiId: !Ref 'RestApi'
+    Type: AWS::ApiGateway::Resource
+  ImageProcessingRestApiResource:
+    Properties:
+      ParentId: !GetAtt 'RestApi.RootResourceId'
+      PathPart: ImageProcessing
+      RestApiId: !Ref 'RestApi'
+    Type: AWS::ApiGateway::Resource
+  ImageProcessingScaleDownAlarm:
+    Properties:
+      AlarmActions:
+        - !Ref 'ImageProcessingContainerScaleDownPolicy'
+        - !Ref 'ImageProcessingScaleDownPolicy'
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: ClusterName
+          Value: !Select
+            - 1
+            - !Split
+              - /
+              - !GetAtt 'ImageProcessingCluster.Arn'
+      EvaluationPeriods: 2
+      MetricName: PipelineWaitingItems
+      Namespace: ImageProcessingService
+      Period: 60
+      Statistic: Average
+      Threshold: 3
+    Type: AWS::CloudWatch::Alarm
+  ImageProcessingScaleDownPolicy:
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref 'ImageProcessingAutoScalingGroup'
+      Cooldown: 60
+      ScalingAdjustment: -1
+    Type: AWS::AutoScaling::ScalingPolicy
+  ImageProcessingScaleUpAlarm:
+    Properties:
+      AlarmActions:
+        - !Ref 'ImageProcessingContainerScaleUpPolicy'
+        - !Ref 'ImageProcessingScaleUpPolicy'
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: ClusterName
+          Value: !Select
+            - 1
+            - !Split
+              - /
+              - !GetAtt 'ImageProcessingCluster.Arn'
+      EvaluationPeriods: 1
+      MetricName: PipelineWaitingItems
+      Namespace: ImageProcessingService
+      Period: 60
+      Statistic: Average
+      Threshold: 10
+    Type: AWS::CloudWatch::Alarm
+  ImageProcessingScaleUpPolicy:
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref 'ImageProcessingAutoScalingGroup'
+      Cooldown: 60
+      ScalingAdjustment: 1
+    Type: AWS::AutoScaling::ScalingPolicy
+  ImageProcessingService:
+    DependsOn: ImageProcessingAutoScalingGroup
+    Properties:
+      Cluster: !Ref 'ImageProcessingCluster'
+      DeploymentConfiguration:
+        MaximumPercent: 100
+        MinimumHealthyPercent: 0
+      DesiredCount: 1
+      LoadBalancers:
+        - ContainerName: ImageProcessingContainer
+          ContainerPort: 8080
+          LoadBalancerName: !Ref 'ImageProcessingLoadBalancer'
+      Role: !Ref 'ImageProcessingServiceRole'
+      TaskDefinition: !Ref 'ImageProcessingTaskDefinition'
+    Type: AWS::ECS::Service
+  ImageProcessingServiceRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - ecs.amazonaws.com
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:Describe*
+                  - elasticloadbalancing:DeregisterInstancesFromLoadBalancer
+                  - elasticloadbalancing:DeregisterTargets
+                  - elasticloadbalancing:Describe*
+                  - elasticloadbalancing:RegisterInstancesWithLoadBalancer
+                  - elasticloadbalancing:RegisterTargets
+                Effect: Allow
+                Resource: '*'
+            Version: '2012-10-17'
+          PolicyName: ImageProcessingServicePolicy
+    Type: AWS::IAM::Role
+  ImageProcessingTaskDefinition:
+    Properties:
+      ContainerDefinitions:
+        - Environment:
+            - Name: FILES_BUCKET
+              Value: !Ref 'ImageProcessingFilesBucket'
+            - Name: USER_UPLOADS_BUCKET
+              Value: !Ref 'ImageProcessingUserUploadsBucket'
+            - Name: RESULTS_BUCKET
+              Value: !Ref 'ImageProcessingResultsBucket'
+            - Name: PLANES_ADDRESS
+              Value: http://PlanesContainer:8081
+          Essential: 'true'
+          Image: !Ref 'ImageProcessingServiceRepository'
+          Links:
+            - PlanesContainer
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref 'ImageProcessingLogGroup'
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: image-processing-service
+          MemoryReservation: 4096
+          Name: ImageProcessingContainer
+          PortMappings:
+            - ContainerPort: 8080
+              HostPort: 8080
+          ResourceRequirements: []
+        - Essential: 'true'
+          Image: !Ref 'PlanesServiceRepository'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref 'ImageProcessingLogGroup'
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: planes-service
+          MemoryReservation: 4096
+          Name: PlanesContainer
+          PortMappings:
+            - ContainerPort: 8081
+              HostPort: 8081
+          ResourceRequirements:
+            - Type: GPU
+              Value: '1'
+    Type: AWS::ECS::TaskDefinition
+  InternetGateway:
+    Properties:
+      Tags:
+        - Key: Application
+          Value: !Ref 'AWS::StackId'
+    Type: AWS::EC2::InternetGateway
+  NetworkAcl:
+    Properties:
+      Tags:
+        - Key: Application
+          Value: !Ref 'AWS::StackId'
+      VpcId: !Ref 'VPC'
+    Type: AWS::EC2::NetworkAcl
+  PublicInternetRoute:
+    DependsOn: AttachInternetGatewayToPublicSubdomain
+    Properties:
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref 'InternetGateway'
+      RouteTableId: !Ref 'RouteTable'
+    Type: AWS::EC2::Route
+  PublicSubnet:
+    Properties:
+      AvailabilityZone: !Sub '${AWS::Region}c'
+      CidrBlock: 10.0.0.0/24
+      Tags:
+        - Key: Application
+          Value: !Ref 'AWS::StackId'
+      VpcId: !Ref 'VPC'
+    Type: AWS::EC2::Subnet
+  PublicSubnet2:
+    Properties:
+      AvailabilityZone: !Sub '${AWS::Region}a'
+      CidrBlock: 10.0.1.0/24
+      Tags:
+        - Key: Application
+          Value: !Ref 'AWS::StackId'
+      VpcId: !Ref 'VPC'
+    Type: AWS::EC2::Subnet
+  PublicSubnet2RouteTableAssociation:
+    Properties:
+      RouteTableId: !Ref 'RouteTable'
+      SubnetId: !Ref 'PublicSubnet2'
+    Type: AWS::EC2::SubnetRouteTableAssociation
+  PublicSubnetRouteTableAssociation:
+    Properties:
+      RouteTableId: !Ref 'RouteTable'
+      SubnetId: !Ref 'PublicSubnet'
+    Type: AWS::EC2::SubnetRouteTableAssociation
+  RestApi:
+    Properties:
+      Name: RestApi
+    Type: AWS::ApiGateway::RestApi
+  RestApiDeployment:
+    DependsOn:
+      - GetUserUploadPresignedUrlRestApiMethod
+      - ImageProcessingMethod
+    Properties:
+      RestApiId: !Ref 'RestApi'
+    Type: AWS::ApiGateway::Deployment
+  RestApiGetUserUploadPresignedUrlPermissions:
+    Properties:
+      Action: lambda:invokeFunction
+      FunctionName: !GetAtt 'GetUserUploadPresignedUrl.Arn'
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub
+        - arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiName}/*/*/${funcName}
+        - apiName: !Ref 'RestApi'
+          funcName: GetUserUploadPresignedUrl
+    Type: AWS::Lambda::Permission
+  RestApiStage:
+    Properties:
+      DeploymentId: !Ref 'RestApiDeployment'
+      RestApiId: !Ref 'RestApi'
+      StageName: v1
+    Type: AWS::ApiGateway::Stage
+  RouteTable:
+    Properties:
+      Tags:
+        - Key: Application
+          Value: !Ref 'AWS::StackId'
+      VpcId: !Ref 'VPC'
+    Type: AWS::EC2::RouteTable
+  VPC:
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      Tags:
+        - Key: Application
+          Value: !Ref 'AWS::StackId'
+    Type: AWS::EC2::VPC

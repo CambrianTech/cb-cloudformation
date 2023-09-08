@@ -227,7 +227,7 @@ class BackendTemplateFactory:
                         }
                     ),
                     Role=self.presigned_url_lambda_execution_role.get_att("Arn"),
-                    Runtime="nodejs10.x",
+                    Runtime="nodejs18.x",
                     MemorySize=128,  # TODO: Make this param
                     Timeout=3  # TODO: Make this param
                 )
@@ -313,7 +313,7 @@ class BackendTemplateFactory:
             # See https://github.com/aws/containers-roadmap/issues/327#issuecomment-471162879
             "us-east-1": {"AMI": "ami-078703383d34ae5ba"}, # ami-0ca3f30db6994a2ff
             "us-east-2": {"AMI": "ami-0c45dd0e1ef99bcf2"},
-            "us-west-1": {"AMI": "ami-0ddd4f56f0468c9c4"},
+            "us-west-1": {"AMI": "ami-0befa174d7147c230"}, #joel copied from us-east-1
             "us-west-2": {"AMI": "ami-0a36be2e955646bb2"},
         })
 
