@@ -2,7 +2,7 @@ Description: Cambrian image processing backend
 Mappings:
   ImageProcessingInstanceId:
     us-east-1:
-      AMI: ami-078703383d34ae5ba
+      AMI: ami-0f0529e7d15de3f0f
     us-east-2:
       AMI: ami-0c45dd0e1ef99bcf2
     us-west-1:
